@@ -10,6 +10,7 @@ const CONNECTIONS_PREFIX = "webrtc:connections:"
 const MESSAGES_PREFIX = "webrtc:messages:"
 const QUEUE_TTL_MS = 1000 * 60 * 5 // 5 minutes TTL for message queues
 const CLIENT_TTL_MS = 1000 * 60 * 10 // 10 minutes TTL for client records
+const CLIENT_GRACE_PERIOD_MS = 15000 // 15 seconds grace period for new clients
 
 // Key prefixes for Deno KV (as arrays)
 const CONNECTION_KEY_PREFIX = ["webrtc", "connections"]
@@ -157,6 +158,17 @@ async function cleanupBasedOnWebRTCConnections() {
       
       console.log(`Checking synth client: ${clientId}`);
       
+      // Check if the client is within its connection grace period
+      const now = Date.now();
+      const connectionTimestamp = entry.value.connectionTimestamp || 0;
+      const timeSinceConnection = now - connectionTimestamp;
+      const isInGracePeriod = timeSinceConnection < CLIENT_GRACE_PERIOD_MS;
+      
+      if (isInGracePeriod) {
+        console.log(`Synth client ${clientId} is in grace period (${timeSinceConnection}ms) - keeping`);
+        continue;
+      }
+      
       // IMPORTANT: Only keep clients with active WebRTC connections to controllers
       if (!clientsWithActiveConnections.has(clientId)) {
         console.log(`Synth client ${clientId} has NO WebRTC connections - WILL REMOVE`);
@@ -234,11 +246,18 @@ async function getConnectedClients() {
     // We'll accept all clients here, no automatic cleanup during regular client listing
     console.log(`Found client: ${clientId}, last seen ${timeSinceLastSeen}ms ago`)
     
-    // Add to client list
+    // Get connection timestamp info
+    const connectionTimestamp = entry.value.connectionTimestamp || lastSeen;
+    const timeSinceConnection = now - connectionTimestamp;
+    const isInGracePeriod = timeSinceConnection < CLIENT_GRACE_PERIOD_MS;
+    
+    // Add to client list with more info
     clients.push({
       id: clientId,
       connected: false, // Will be set correctly by the controller's own tracking
-      lastSeen: lastSeen
+      lastSeen: lastSeen,
+      connectionTimestamp: connectionTimestamp,
+      isInGracePeriod: isInGracePeriod
     })
   }
   
@@ -251,11 +270,13 @@ async function registerConnection(id: string, socket: WebSocket) {
   const connectionKey = getConnectionKey(id)
   const isControllerClient = isController(id)
   
+  const now = Date.now()
   // Store instance ID - we just need to know the connection exists
   const instanceId = Deno.env.get("DENO_DEPLOYMENT_ID") || "local"
   await kv.set(connectionKey, {
     instanceId,
-    lastSeen: Date.now(),
+    lastSeen: now,
+    connectionTimestamp: now, // Track when client first connected
     isController: isControllerClient
   }, { expireIn: CLIENT_TTL_MS })
   
@@ -419,10 +440,13 @@ export const handler: Handlers = {
           const existingData = await kv.get(connectionKey)
           
           if (existingData.value) {
+            // Preserve the original connection timestamp
+            const connectionTimestamp = existingData.value.connectionTimestamp || Date.now()
             // Update the lastSeen timestamp
             await kv.set(connectionKey, {
               ...existingData.value,
-              lastSeen: Date.now()
+              lastSeen: Date.now(),
+              connectionTimestamp // Keep the original connection time
             }, { expireIn: CLIENT_TTL_MS })
           }
         }
@@ -482,17 +506,31 @@ export const handler: Handlers = {
               
               await setActiveController(clientId);
               
-              // Clean up inactive clients when a controller becomes active
-              console.log("Initiating cleanup of inactive clients");
-              const removedCount = await cleanupInactiveClients();
-              console.log(`Cleanup completed - removed ${removedCount} inactive clients`);
+              // Clean up inactive clients when a controller becomes active, but with a delay
+              console.log("Scheduling cleanup of inactive clients with delay");
               
-              // Force the controller to request an updated client list
+              // First, immediately send the client list without cleanup
               socket.send(JSON.stringify({
                 type: 'client-list',
                 clients: await getConnectedClients()
               }));
-              console.log("Sent updated client list to controller");
+              console.log("Sent initial client list to controller");
+              
+              // Then schedule the cleanup with a delay to allow clients to establish connections
+              setTimeout(async () => {
+                console.log("Executing delayed cleanup of inactive clients");
+                const removedCount = await cleanupInactiveClients();
+                console.log(`Delayed cleanup completed - removed ${removedCount} inactive clients`);
+                
+                // Force the controller to request an updated client list after cleanup
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(JSON.stringify({
+                    type: 'client-list',
+                    clients: await getConnectedClients()
+                  }));
+                  console.log("Sent updated client list to controller after cleanup");
+                }
+              }, CLIENT_GRACE_PERIOD_MS); // Use the same grace period for consistency
               
               // Get the clean list of clients for notifications
               const regularClients = await getConnectedClients();
@@ -559,8 +597,30 @@ export const handler: Handlers = {
               // Store the controller's active connections
               activeWebRTCConnections.set(clientId, new Set(connections));
               
-              // Now clean up any inactive clients (those not connected to any controller)
-              await cleanupBasedOnWebRTCConnections();
+              // Only run cleanup if it's been at least half the grace period since controller activated
+              // This provides a balance between keeping the connection list clean and giving clients time to connect
+              const activeController = await getActiveController();
+              if (activeController === clientId) {
+                const controllerKey = ["webrtc", "active", "controller"];
+                const controllerData = await kv.get(controllerKey);
+                
+                if (controllerData.value && controllerData.value.timestamp) {
+                  const timeSinceActivation = Date.now() - controllerData.value.timestamp;
+                  if (timeSinceActivation > CLIENT_GRACE_PERIOD_MS / 2) {
+                    console.log(`Controller has been active for ${timeSinceActivation}ms, running cleanup`);
+                    // Now clean up any inactive clients (those not connected to any controller)
+                    await cleanupBasedOnWebRTCConnections();
+                  } else {
+                    console.log(`Controller recently activated (${timeSinceActivation}ms ago), skipping cleanup`);
+                  }
+                } else {
+                  // If we can't determine the activation time, still run cleanup
+                  await cleanupBasedOnWebRTCConnections();
+                }
+              } else {
+                // If this controller isn't the active one, still run cleanup
+                await cleanupBasedOnWebRTCConnections();
+              }
             }
             break
             
@@ -572,10 +632,12 @@ export const handler: Handlers = {
               const existingData = await kv.get(connectionKey)
               
               if (existingData.value) {
-                // Update the lastSeen timestamp
+                // Update the lastSeen timestamp but preserve original connection timestamp
+                const connectionTimestamp = existingData.value.connectionTimestamp || Date.now()
                 await kv.set(connectionKey, {
                   ...existingData.value,
-                  lastSeen: Date.now()
+                  lastSeen: Date.now(),
+                  connectionTimestamp // Preserve the original connection time
                 }, { expireIn: CLIENT_TTL_MS })
                 
                 console.log(`Updated heartbeat for client ${clientId}`)
