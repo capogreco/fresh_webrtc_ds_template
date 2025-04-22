@@ -5,17 +5,7 @@ import {
   frequencyToNote,
   noteToFrequency,
   SynthParams,
-  validateAttack,
-  validateDetune,
-  validateFilterCutoff,
-  validateFilterResonance,
-  validateFrequency,
-  validatePortamentoTime,
-  validateRelease,
-  validateVibratoRate,
-  validateVibratoWidth,
-  validateVolume,
-  validateWaveform,
+  PARAM_DESCRIPTORS,
 } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
 import { Signal } from "@preact/signals";
@@ -269,62 +259,62 @@ export default function WebRTC() {
   // Unified parameter handler map
   const paramHandlers: Record<string, ParamHandler> = {
     frequency: (value, source = "controller") => {
-      const validValue = validateFrequency(Number(value));
+      const validValue = PARAM_DESCRIPTORS.frequency.validate(Number(value));
       updateFrequency(validValue);
       addLog(`Frequency updated to ${validValue}Hz by ${source}`);
     },
     waveform: (value, source = "controller") => {
-      const validValue = validateWaveform(value);
+      const validValue = PARAM_DESCRIPTORS.waveform.validate(value);
       updateWaveform(validValue);
       addLog(`Waveform updated to ${validValue} by ${source}`);
     },
     volume: (value, source = "controller") => {
-      const validValue = validateVolume(Number(value));
+      const validValue = PARAM_DESCRIPTORS.volume.validate(Number(value));
       updateVolume(validValue);
       addLog(`Volume updated to ${validValue} by ${source}`);
     },
     detune: (value, source = "controller") => {
-      const validValue = validateDetune(Number(value));
+      const validValue = PARAM_DESCRIPTORS.detune.validate(Number(value));
       updateDetune(validValue);
       addLog(`Detune updated to ${validValue} cents by ${source}`);
     },
     oscillatorEnabled: (value, source = "controller") => {
-      const enabled = value === true || value === "true" || value === 1;
+      const enabled = PARAM_DESCRIPTORS.oscillatorEnabled.validate(value);
       toggleOscillator(enabled);
       addLog(`Oscillator ${enabled ? "enabled" : "disabled"} by ${source}`);
     },
     attack: (value, source = "controller") => {
-      const validValue = validateAttack(Number(value));
+      const validValue = PARAM_DESCRIPTORS.attack.validate(Number(value));
       updateAttack(validValue);
       addLog(`Attack updated to ${validValue}s by ${source}`);
     },
     release: (value, source = "controller") => {
-      const validValue = validateRelease(Number(value));
+      const validValue = PARAM_DESCRIPTORS.release.validate(Number(value));
       updateRelease(validValue);
       addLog(`Release updated to ${validValue}s by ${source}`);
     },
     filterCutoff: (value, source = "controller") => {
-      const validValue = validateFilterCutoff(Number(value));
+      const validValue = PARAM_DESCRIPTORS.filterCutoff.validate(Number(value));
       updateFilterCutoff(validValue);
       addLog(`Filter cutoff updated to ${validValue}Hz by ${source}`);
     },
     filterResonance: (value, source = "controller") => {
-      const validValue = validateFilterResonance(Number(value));
+      const validValue = PARAM_DESCRIPTORS.filterResonance.validate(Number(value));
       updateFilterResonance(validValue);
       addLog(`Filter resonance updated to ${validValue} by ${source}`);
     },
     vibratoRate: (value, source = "controller") => {
-      const validValue = validateVibratoRate(Number(value));
+      const validValue = PARAM_DESCRIPTORS.vibratoRate.validate(Number(value));
       updateVibratoRate(validValue);
       addLog(`Vibrato rate updated to ${validValue}Hz by ${source}`);
     },
     vibratoWidth: (value, source = "controller") => {
-      const validValue = validateVibratoWidth(Number(value));
+      const validValue = PARAM_DESCRIPTORS.vibratoWidth.validate(Number(value));
       updateVibratoWidth(validValue);
       addLog(`Vibrato width updated to ${validValue} cents by ${source}`);
     },
     portamentoTime: (value, source = "controller") => {
-      const validValue = validatePortamentoTime(Number(value));
+      const validValue = PARAM_DESCRIPTORS.portamentoTime.validate(Number(value));
       updatePortamentoTime(validValue);
       addLog(`Portamento time updated to ${validValue}s by ${source}`);
     },
