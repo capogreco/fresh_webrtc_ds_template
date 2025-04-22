@@ -10,6 +10,13 @@ import {
 import { formatTime } from "../lib/utils/formatTime.ts";
 import { Signal } from "@preact/signals";
 
+// Extend the window object for Web Audio API
+declare global {
+  interface Window {
+    webkitAudioContext?: typeof AudioContext;
+  }
+}
+
 // Type definitions for abstracted functionality
 type ParamHandler = (value: any, source?: string) => void;
 type MessageHandler = (event: MessageEvent, channel: RTCDataChannel) => void;
@@ -21,6 +28,8 @@ let gainNode: GainNode | null = null;
 let filterNode: BiquadFilterNode | null = null;
 let vibratoOsc: OscillatorNode | null = null;
 let vibratoGain: GainNode | null = null;
+
+// Web Audio Synthesizer Nodes - using direct Web Audio API
 
 export default function WebRTC() {
   // State management
@@ -44,11 +53,11 @@ export default function WebRTC() {
   const frequency = useSignal(DEFAULT_SYNTH_PARAMS.frequency);
   const waveform = useSignal<OscillatorType>(DEFAULT_SYNTH_PARAMS.waveform);
   const volume = useSignal(DEFAULT_SYNTH_PARAMS.volume);
-  const oscillatorEnabled = useSignal(DEFAULT_SYNTH_PARAMS.oscillatorEnabled);
   const detune = useSignal(DEFAULT_SYNTH_PARAMS.detune);
   const currentNote = useSignal(
     frequencyToNote(DEFAULT_SYNTH_PARAMS.frequency),
   ); // Derived value for display
+  const isNoteActive = useSignal(false); // Track if a note is currently playing
 
   // New synth parameters
   const attack = useSignal(DEFAULT_SYNTH_PARAMS.attack);
@@ -147,7 +156,7 @@ export default function WebRTC() {
         { param: "frequency", value: frequency.value },
         { param: "waveform", value: waveform.value },
         { param: "volume", value: volume.value },
-        { param: "oscillatorEnabled", value: oscillatorEnabled.value },
+        { param: "oscillatorEnabled", value: isNoteActive.value },
         { param: "detune", value: detune.value },
         { param: "attack", value: attack.value },
         { param: "release", value: release.value },
@@ -280,8 +289,15 @@ export default function WebRTC() {
     },
     oscillatorEnabled: (value, source = "controller") => {
       const enabled = PARAM_DESCRIPTORS.oscillatorEnabled.validate(value);
-      toggleOscillator(enabled);
-      addLog(`Oscillator ${enabled ? "enabled" : "disabled"} by ${source}`);
+      // Handle as note on/off
+      if (enabled) {
+        noteOn(frequency.value);
+        isNoteActive.value = true;
+      } else {
+        noteOff();
+        isNoteActive.value = false;
+      }
+      addLog(`Note ${enabled ? "on" : "off"} by ${source}`);
     },
     attack: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.attack.validate(Number(value));
@@ -345,6 +361,19 @@ export default function WebRTC() {
           const param = message.param;
           const value = message.value;
 
+          // Special handling for oscillatorEnabled - update isNoteActive
+          if (param === "oscillatorEnabled") {
+            console.log(`[SYNTH] Received oscillatorEnabled=${value}, current isNoteActive=${isNoteActive.value}, isMuted=${isMuted.value}`);
+            isNoteActive.value = !!value; // Convert to boolean
+            
+            // If audio is already enabled (not muted) and oscillatorEnabled is true, play the note immediately
+            if (isNoteActive.value && !isMuted.value && audioContext) {
+              console.log("[SYNTH] Audio already enabled and oscillatorEnabled=true, playing note immediately");
+              noteOn(frequency.value);
+              addLog(`Playing note ${currentNote.value} (${frequency.value}Hz) due to controller setting`);
+            }
+          }
+
           if (paramHandlers[param]) {
             paramHandlers[param](
               value,
@@ -354,6 +383,29 @@ export default function WebRTC() {
             console.warn(`Unknown synth parameter: ${param}`);
             addLog(`Unknown synth parameter: ${param}`);
           }
+          return;
+        }
+        
+        // Handle note_on messages
+        if (message.type === "note_on") {
+          if (message.frequency) {
+            // Initialize audio if needed
+            if (!audioContext) {
+              initAudioContext();
+            }
+            
+            // Play note at the specified frequency
+            noteOn(message.frequency);
+            isNoteActive.value = true;
+          }
+          return;
+        }
+        
+        // Handle note_off messages
+        if (message.type === "note_off") {
+          // Release the current note
+          noteOff();
+          isNoteActive.value = false;
           return;
         }
       } catch (error) {
@@ -390,6 +442,18 @@ export default function WebRTC() {
       } else {
         // Even if audio is not enabled, send the audio state
         sendAudioStateOnly(channel);
+      }
+      
+      // Request current controller state to ensure we're in sync
+      // especially for note on/off status
+      try {
+        console.log("[SYNTH] Requesting current controller state");
+        channel.send(JSON.stringify({
+          type: "request_current_state"
+        }));
+        addLog("Requested current controller state");
+      } catch (error) {
+        console.error("Error requesting controller state:", error);
       }
     };
 
@@ -938,7 +1002,9 @@ export default function WebRTC() {
 
         // Create gain node for volume control (always in chain)
         gainNode = audioContext.createGain();
-        gainNode.gain.value = volume.value;
+        
+        // Start with zero gain - we'll use attack/release envelopes
+        gainNode.gain.setValueAtTime(0, audioContext.currentTime);
 
         // Connect filter to gain, and gain to destination
         filterNode.connect(gainNode);
@@ -983,49 +1049,52 @@ export default function WebRTC() {
         // Start the vibrato oscillator
         vibratoOsc.start();
 
-        // Create oscillator if enabled
-        if (oscillatorEnabled.value) {
-          oscillator = audioContext.createOscillator();
-          oscillator.type = waveform.value;
-          oscillator.frequency.value = frequency.value;
-          oscillator.detune.value = detune.value;
+        // Create oscillator regardless of whether it's enabled
+        // We'll control its audibility through the gain node
+        oscillator = audioContext.createOscillator();
+        oscillator.type = waveform.value;
+        oscillator.frequency.value = frequency.value;
+        oscillator.detune.value = detune.value;
 
-          // Always connect vibrato LFO to oscillator frequency parameter
-          // (gain is set to 0 if vibrato should be inactive)
-          if (vibratoGain) {
-            vibratoGain.connect(oscillator.frequency);
+        // Always connect vibrato LFO to oscillator frequency parameter
+        // (gain is set to 0 if vibrato should be inactive)
+        if (vibratoGain) {
+          vibratoGain.connect(oscillator.frequency);
 
-            // Update the vibrato amount based on the new oscillator's frequency
-            if (vibratoWidth.value > 0) {
-              const semitoneRatio = Math.pow(2, 1 / 12);
-              const semitoneAmount = vibratoWidth.value / 100;
-              const currentFreq = oscillator.frequency.value;
-              const vibratoAmount = currentFreq *
-                (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
+          // Update the vibrato amount based on the new oscillator's frequency
+          if (vibratoWidth.value > 0) {
+            const semitoneRatio = Math.pow(2, 1 / 12);
+            const semitoneAmount = vibratoWidth.value / 100;
+            const currentFreq = oscillator.frequency.value;
+            const vibratoAmount = currentFreq *
+              (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
 
-              vibratoGain.gain.value = vibratoAmount;
-              console.log(
-                `Vibrato amount adjusted to ${vibratoAmount}Hz based on oscillator frequency ${currentFreq}Hz`,
-              );
-            }
+            vibratoGain.gain.value = vibratoAmount;
+            console.log(
+              `Vibrato amount adjusted to ${vibratoAmount}Hz based on oscillator frequency ${currentFreq}Hz`,
+            );
           }
-
-          // Connect oscillator to filter
-          oscillator.connect(filterNode);
-
-          // Start the oscillator
-          oscillator.start();
-
-          addLog(
-            `Oscillator started with note ${currentNote.value} (${frequency.value}Hz) ` +
-              `using ${waveform.value} waveform, detune: ${detune.value}¢, ` +
-              `filter: ${Math.round(filterCutoff.value)}Hz (Q:${
-                filterResonance.value.toFixed(1)
-              })`,
-          );
-        } else {
-          addLog("Oscillator is disabled");
         }
+
+        // Connect oscillator to filter
+        oscillator.connect(filterNode);
+
+        // Start the oscillator
+        oscillator.start();
+
+        // All notes start silent - will be triggered by noteOn()
+
+        // Log oscillator creation
+        addLog(
+          `Oscillator started with note ${currentNote.value} (${frequency.value}Hz) ` +
+            `using ${waveform.value} waveform, detune: ${detune.value}¢, ` +
+            `filter: ${Math.round(filterCutoff.value)}Hz (Q:${
+              filterResonance.value.toFixed(1)
+            })`,
+        );
+        
+        // Start with gain set to 0 - notes will use noteOn() to play sound
+        // with proper attack envelope
       }
 
       // Resume the audio context (needed for browsers that suspend by default)
@@ -1062,8 +1131,30 @@ export default function WebRTC() {
       isMuted.value = false; // Not muted = audio enabled
       showAudioButton.value = false;
 
+      // If the controller has already set Note On, play a note immediately
+      // This ensures immediate sound after enabling audio if Note On is selected
+      if (isNoteActive.value) {
+        console.log("[SYNTH] Auto-playing note because controller has Note On selected");
+        noteOn(frequency.value);
+        addLog(`Auto-playing note ${currentNote.value} (${frequency.value}Hz)`);
+      }
+
       // Send audio state to controller if connected
       sendAudioState();
+      
+      // Request current controller state to ensure we're in sync
+      // especially for note on/off status
+      if (dataChannel.value && dataChannel.value.readyState === "open") {
+        try {
+          dataChannel.value.send(JSON.stringify({
+            type: "request_current_state"
+          }));
+          console.log("[SYNTH] Requested current controller state after audio initialization");
+          addLog("Requested updated controller state");
+        } catch (error) {
+          console.error("Error requesting controller state:", error);
+        }
+      }
 
       // No need to auto-connect here since we now connect immediately when receiving controller info
       // Request controller info if we don't have it yet and haven't attempted a connection
@@ -1088,6 +1179,7 @@ export default function WebRTC() {
     // Update UI note display as well
     currentNote.value = frequencyToNote(newFrequency);
 
+    // Update the Web Audio oscillator if it exists
     if (oscillator && audioContext) {
       const now = audioContext.currentTime;
       const currentFreq = oscillator.frequency.value;
@@ -1122,19 +1214,6 @@ export default function WebRTC() {
         addLog(`Frequency changed to ${newFrequency}Hz (${currentNote.value})`);
       }
 
-      // Send frequency update to controller if connected
-      if (dataChannel.value && dataChannel.value.readyState === "open") {
-        try {
-          dataChannel.value.send(JSON.stringify({
-            type: "synth_param",
-            param: "frequency",
-            value: newFrequency,
-          }));
-        } catch (error) {
-          console.error("Error sending frequency update:", error);
-        }
-      }
-
       // Update vibrato amount when frequency changes (if vibrato is active)
       if (vibratoGain && vibratoOsc && vibratoWidth.value > 0 && audioContext) {
         const now = audioContext.currentTime;
@@ -1149,34 +1228,107 @@ export default function WebRTC() {
           `Vibrato amount adjusted to ${vibratoAmount}Hz for new frequency ${newFrequency}Hz`,
         );
       }
+    } else {
+      // Just log the change if no oscillator exists
+      addLog(`Frequency changed to ${newFrequency}Hz (${currentNote.value})`);
+    }
+    
+    // Send frequency update to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "frequency",
+          value: newFrequency,
+        }));
+      } catch (error) {
+        console.error("Error sending frequency update:", error);
+      }
     }
   };
 
   // Update oscillator waveform
   const updateWaveform = (newWaveform: OscillatorType) => {
+    // Update the signal value
+    waveform.value = newWaveform;
+    
+    // Update the actual oscillator if it exists
     if (oscillator) {
       // Need to update oscillator type directly since it's not an AudioParam
       oscillator.type = newWaveform;
-
-      // Use the generic update function for the rest
+      
+      // Log the change
+      addLog(`Waveform updated to ${newWaveform}`);
+    } else {
+      // Just update the signal if no oscillator exists
       updateAudioParam({
         signal: waveform,
         paramName: "Waveform",
         newValue: newWaveform,
       });
     }
+    
+    // Send to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "waveform",
+          value: newWaveform,
+        }));
+      } catch (error) {
+        console.error("Error sending waveform update:", error);
+      }
+    }
   };
 
   // Update volume
   const updateVolume = (newVolume: number) => {
-    if (gainNode) {
-      updateAudioParam({
-        signal: volume,
-        paramName: "Volume",
-        newValue: newVolume,
-        audioNode: gainNode.gain,
-        formatValue: (val) => `${Math.round(val * 100)}%`,
-      });
+    // Update the signal value
+    volume.value = newVolume;
+    
+    // Update the gain node if it exists
+    if (gainNode && audioContext) {
+      const now = audioContext.currentTime;
+      
+      // Don't interrupt attack/release envelopes
+      // Only set the volume if the oscillator is in steady state and a note is active
+      if (oscillator && isNoteActive.value) {
+        // Check the current scheduled events - if there's a ramp in progress, don't interrupt it
+        const currentGain = gainNode.gain.value;
+        
+        // If gain is very low (during attack) or very high (steady state), 
+        // just update target volume for future envelopes
+        if (currentGain > 0.9 * volume.value) {
+          // We're at or near full volume, safe to update directly
+          gainNode.gain.cancelScheduledValues(now);
+          gainNode.gain.setValueAtTime(newVolume, now);
+        }
+        // Otherwise we're probably in an attack or release phase, don't interrupt
+      } else if (!oscillator) {
+        // No oscillator active, just update the value directly
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setValueAtTime(newVolume, now);
+      }
+      
+      // Log the update
+      addLog(`Volume updated to ${Math.round(newVolume * 100)}%`);
+    } else {
+      // Just log if no gainNode exists
+      addLog(`Volume updated to ${Math.round(newVolume * 100)}%`);
+    }
+    
+    // Send to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "volume",
+          value: newVolume,
+        }));
+      } catch (error) {
+        console.error("Error sending volume update:", error);
+      }
     }
   };
 
@@ -1198,12 +1350,16 @@ export default function WebRTC() {
 
   // Update detune value
   const updateDetune = (cents: number) => {
+    // Update the signal value
+    detune.value = cents;
+    
+    // Update the oscillator if it exists
     if (oscillator) {
       updateAudioParam({
         signal: detune,
         paramName: "Detune",
         newValue: cents,
-        audioNode: oscillator?.detune || null,
+        audioNode: oscillator.detune,
         unit: "cents",
         formatValue: (val) => val > 0 ? `+${val}` : String(val),
       });
@@ -1216,6 +1372,19 @@ export default function WebRTC() {
         unit: "cents",
         formatValue: (val) => val > 0 ? `+${val}` : String(val),
       });
+    }
+    
+    // Send to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "detune",
+          value: cents,
+        }));
+      } catch (error) {
+        console.error("Error sending detune update:", error);
+      }
     }
   };
 
@@ -1230,6 +1399,19 @@ export default function WebRTC() {
       formatValue: (val) =>
         val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
     });
+    
+    // Send to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "attack",
+          value: attackTime,
+        }));
+      } catch (error) {
+        console.error("Error sending attack update:", error);
+      }
+    }
   };
 
   // Update release time
@@ -1243,10 +1425,27 @@ export default function WebRTC() {
       formatValue: (val) =>
         val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
     });
+    
+    // Send to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "release",
+          value: releaseTime,
+        }));
+      } catch (error) {
+        console.error("Error sending release update:", error);
+      }
+    }
   };
 
   // Update filter cutoff
   const updateFilterCutoff = (cutoffFreq: number) => {
+    // Update the signal value
+    filterCutoff.value = cutoffFreq;
+    
+    // Update the filter if it exists
     if (filterNode) {
       updateAudioParam({
         signal: filterCutoff,
@@ -1268,10 +1467,27 @@ export default function WebRTC() {
           val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`,
       });
     }
+    
+    // Send to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "filterCutoff",
+          value: cutoffFreq,
+        }));
+      } catch (error) {
+        console.error("Error sending filter cutoff update:", error);
+      }
+    }
   };
 
   // Update filter resonance
   const updateFilterResonance = (resonance: number) => {
+    // Update the signal value
+    filterResonance.value = resonance;
+    
+    // Update the filter if it exists
     if (filterNode) {
       updateAudioParam({
         signal: filterResonance,
@@ -1288,6 +1504,19 @@ export default function WebRTC() {
         newValue: resonance,
         formatValue: (val) => val.toFixed(1),
       });
+    }
+    
+    // Send to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param: "filterResonance",
+          value: resonance,
+        }));
+      } catch (error) {
+        console.error("Error sending filter resonance update:", error);
+      }
     }
   };
 
@@ -1388,128 +1617,204 @@ export default function WebRTC() {
     });
   };
 
-  // Toggle oscillator on/off
-  const toggleOscillator = (enabled: boolean) => {
-    console.log(
-      `[SYNTH] toggleOscillator called with enabled=${enabled}, current value=${oscillatorEnabled.value}`,
-    );
+  // Play a note with the given frequency (with attack envelope)
+  const noteOn = (noteFrequency: number) => {
+    console.log(`[SYNTH] noteOn called with frequency=${noteFrequency}Hz`);
 
-    oscillatorEnabled.value = enabled;
-
-    if (!audioContext) {
-      console.warn(
-        "[SYNTH] Cannot toggle oscillator: audioContext is not initialized",
-      );
+    if (!audioContext || isMuted.value) {
+      console.warn("[SYNTH] Cannot play note: audio not initialized or muted");
       return;
     }
+    
+    const now = audioContext.currentTime;
 
-    if (enabled) {
-      // Turn oscillator on
-      if (!oscillator) {
-        console.log("[SYNTH] Creating and starting new oscillator");
+    // Initialize audio nodes if needed
+    if (!oscillator) {
+      console.log("[SYNTH] Creating and starting new oscillator");
 
-        // Check if audio nodes exist and create them if missing
-        if (!filterNode) {
-          console.log("[SYNTH] Creating missing filter node");
-          filterNode = audioContext.createBiquadFilter();
-          filterNode.type = "lowpass";
-          filterNode.frequency.value = filterCutoff.value;
-          filterNode.Q.value = filterResonance.value;
-        }
-
-        if (!gainNode) {
-          console.log("[SYNTH] Creating missing gain node");
-          gainNode = audioContext.createGain();
-          gainNode.gain.value = volume.value;
-
-          // Connect filter to gain and gain to destination
-          filterNode.connect(gainNode);
-          gainNode.connect(audioContext.destination);
-        }
-
-        // Create vibrato if it doesn't exist and parameters are non-zero
-        if (!vibratoOsc && vibratoRate.value > 0 && vibratoWidth.value > 0) {
-          console.log("[SYNTH] Creating vibrato LFO");
-          vibratoOsc = audioContext.createOscillator();
-          vibratoOsc.type = "sine";
-          vibratoOsc.frequency.value = vibratoRate.value;
-
-          vibratoGain = audioContext.createGain();
-          const vibratoAmount = vibratoWidth.value / 100 * 0.5;
-          vibratoGain.gain.value = vibratoAmount;
-
-          // Connect vibrato oscillator to gain
-          vibratoOsc.connect(vibratoGain);
-          vibratoOsc.start();
-        }
-
-        // Create main oscillator
-        oscillator = audioContext.createOscillator();
-        oscillator.type = waveform.value;
-        oscillator.frequency.value = frequency.value;
-        oscillator.detune.value = detune.value;
-
-        // Connect vibrato to frequency if it exists
-        if (vibratoOsc && vibratoGain) {
-          vibratoGain.connect(oscillator.frequency);
-        }
-
-        // Connect oscillator to filter (which is connected to the gain node)
-        console.log("[SYNTH] Connecting oscillator to audio chain");
-        oscillator.connect(filterNode);
-
-        // Start the oscillator
-        console.log("[SYNTH] Starting oscillator");
-        oscillator.start();
-
-        addLog(
-          `Oscillator turned on: ${waveform.value} @ ${frequency.value}Hz ` +
-            `(detune: ${detune.value}¢, filter: ${
-              Math.round(filterCutoff.value)
-            }Hz, Q: ${filterResonance.value.toFixed(1)})`,
-        );
-      } else {
-        console.log(
-          "[SYNTH] Oscillator already exists, not creating a new one",
-        );
+      // Check if audio nodes exist and create them if missing
+      if (!filterNode) {
+        console.log("[SYNTH] Creating missing filter node");
+        filterNode = audioContext.createBiquadFilter();
+        filterNode.type = "lowpass";
+        filterNode.frequency.value = filterCutoff.value;
+        filterNode.Q.value = filterResonance.value;
       }
+
+      if (!gainNode) {
+        console.log("[SYNTH] Creating missing gain node");
+        gainNode = audioContext.createGain();
+        
+        // Start with zero gain for attack envelope
+        gainNode.gain.setValueAtTime(0, now);
+        
+        // Connect filter to gain and gain to destination
+        filterNode.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+      } else {
+        // Just set gain to zero for existing gain node
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setValueAtTime(0, now);
+      }
+
+      // Create vibrato if it doesn't exist and parameters are non-zero
+      if (!vibratoOsc && vibratoRate.value > 0 && vibratoWidth.value > 0) {
+        console.log("[SYNTH] Creating vibrato LFO");
+        vibratoOsc = audioContext.createOscillator();
+        vibratoOsc.type = "sine";
+        vibratoOsc.frequency.value = vibratoRate.value;
+
+        vibratoGain = audioContext.createGain();
+        const vibratoAmount = vibratoWidth.value / 100 * 0.5;
+        vibratoGain.gain.value = vibratoAmount;
+
+        // Connect vibrato oscillator to gain
+        vibratoOsc.connect(vibratoGain);
+        vibratoOsc.start();
+      }
+
+      // Create main oscillator
+      oscillator = audioContext.createOscillator();
+      oscillator.type = waveform.value;
+      oscillator.frequency.value = noteFrequency;
+      oscillator.detune.value = detune.value;
+
+      // Connect vibrato to frequency if it exists
+      if (vibratoOsc && vibratoGain) {
+        vibratoGain.connect(oscillator.frequency);
+      }
+
+      // Connect oscillator to filter (which is connected to the gain node)
+      console.log("[SYNTH] Connecting oscillator to audio chain");
+      oscillator.connect(filterNode);
+
+      // Start the oscillator
+      console.log("[SYNTH] Starting oscillator");
+      oscillator.start();
     } else {
-      // Turn oscillator off
-      if (oscillator) {
-        console.log("[SYNTH] Stopping and disconnecting oscillator");
-        oscillator.stop();
-        oscillator.disconnect();
-        oscillator = null;
-        addLog("Oscillator turned off");
-
-        // Don't stop vibrato, just disconnect it from the oscillator
-        // This way it's preserved for when the oscillator is turned back on
-        if (vibratoGain) {
-          try {
-            // Just disconnect the gain node (removing connections to oscillator.frequency)
-            vibratoGain.disconnect();
-            console.log(
-              "[SYNTH] Disconnected vibrato from oscillator frequency",
-            );
-          } catch (error) {
-            console.error("[SYNTH] Error disconnecting vibrato:", error);
-          }
-        }
-      } else {
-        console.log("[SYNTH] No oscillator to turn off");
-      }
+      // Update frequency of existing oscillator
+      updateFrequency(noteFrequency);
+    }
+    
+    // Update frequency display
+    frequency.value = noteFrequency;
+    currentNote.value = frequencyToNote(noteFrequency);
+    
+    // Apply attack envelope to gain
+    if (gainNode) {
+      const attackTime = attack.value;
+      
+      // Cancel any previous scheduled changes
+      gainNode.gain.cancelScheduledValues(now);
+      
+      // Always start from zero for a consistent attack envelope,
+      // regardless of whether the oscillator was just created or already existed
+      gainNode.gain.setValueAtTime(0, now);
+      
+      // Ramp up to full volume over attack time
+      gainNode.gain.linearRampToValueAtTime(volume.value, now + attackTime);
+      console.log(`[SYNTH] Applied attack envelope: ${attackTime}s from zero to ${volume.value}`);
     }
 
-    // Send oscillator state to controller if connected
+    addLog(
+      `Note on: ${waveform.value} @ ${noteFrequency}Hz (${currentNote.value}) ` +
+        `with attack: ${attack.value}s, release: ${release.value}s`,
+    );
+    
+    // Send note_on state to controller if connected
     if (dataChannel.value && dataChannel.value.readyState === "open") {
       try {
         dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "oscillatorEnabled",
-          value: enabled,
+          type: "note_on",
+          frequency: noteFrequency
         }));
       } catch (error) {
-        console.error("Error sending oscillator state:", error);
+        console.error("Error sending note_on:", error);
+      }
+    }
+  };
+  
+  // Release the current note (with release envelope)
+  const noteOff = () => {
+    console.log("[SYNTH] noteOff called");
+
+    if (!audioContext || isMuted.value) {
+      return;
+    }
+    
+    const now = audioContext.currentTime;
+
+    // Apply release envelope 
+    if (oscillator && gainNode) {
+      const releaseTime = release.value;
+      
+      // Cancel any previous scheduled changes
+      gainNode.gain.cancelScheduledValues(now);
+      
+      // Get current gain value
+      const currentGain = gainNode.gain.value;
+      gainNode.gain.setValueAtTime(currentGain, now);
+      
+      // Ramp down to zero over release time
+      gainNode.gain.linearRampToValueAtTime(0, now + releaseTime);
+      console.log(`[SYNTH] Applied release envelope: ${releaseTime}s`);
+      
+      // Schedule actual oscillator stop after release is complete
+      setTimeout(() => {
+        if (oscillator) {
+          try {
+            oscillator.stop();
+            oscillator.disconnect();
+            oscillator = null;
+            console.log("[SYNTH] Oscillator stopped after release");
+          } catch (error) {
+            console.error("[SYNTH] Error stopping oscillator:", error);
+          }
+          
+          // Don't stop vibrato, just disconnect it from the oscillator
+          if (vibratoGain) {
+            try {
+              // Just disconnect the gain node (removing connections to oscillator.frequency)
+              vibratoGain.disconnect();
+              console.log("[SYNTH] Disconnected vibrato from oscillator frequency");
+            } catch (error) {
+              console.error("[SYNTH] Error disconnecting vibrato:", error);
+            }
+          }
+        }
+      }, releaseTime * 1000);
+      
+      addLog(`Note off with release: ${release.value}s`);
+    } else if (oscillator) {
+      // No gain node, just stop the oscillator immediately
+      console.log("[SYNTH] Stopping and disconnecting oscillator (no envelope)");
+      oscillator.stop();
+      oscillator.disconnect();
+      oscillator = null;
+      addLog("Note off (immediate)");
+      
+      // Don't stop vibrato, just disconnect it from the oscillator
+      if (vibratoGain) {
+        try {
+          // Just disconnect the gain node (removing connections to oscillator.frequency)
+          vibratoGain.disconnect();
+          console.log("[SYNTH] Disconnected vibrato from oscillator frequency");
+        } catch (error) {
+          console.error("[SYNTH] Error disconnecting vibrato:", error);
+        }
+      }
+    } else {
+      console.log("[SYNTH] No note to release");
+    }
+    
+    // Send note_off to controller if connected
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "note_off"
+        }));
+      } catch (error) {
+        console.error("Error sending note_off state:", error);
       }
     }
   };
@@ -1691,17 +1996,17 @@ export default function WebRTC() {
                 <h3>Synth Status</h3>
                 <div class="param-display">
                   <p>
-                    Oscillator:{" "}
+                    Note Status:{" "}
                     <span
-                      class={oscillatorEnabled.value
+                      class={isNoteActive.value
                         ? "status-on"
                         : "status-off"}
                     >
-                      {oscillatorEnabled.value ? "ON" : "OFF"}
+                      {isNoteActive.value ? "PLAYING" : "OFF"}
                     </span>
                   </p>
                   <p>
-                    Note: <span class="param-value">{currentNote.value}</span>
+                    Pitch: <span class="param-value">{currentNote.value}</span>
                   </p>
                   <p>
                     Waveform: <span class="param-value">{waveform.value}</span>

@@ -39,21 +39,27 @@ function SynthControls(
   return (
     <div className="client-synth-controls">
       <div className="synth-controls-compact">
-        {/* On/Off Controls */}
+        {/* Note On/Off Controls */}
         <div className="control-group-compact">
-          <label>Power</label>
+          <label>Note On</label>
           <div className="power-controls">
             {/* Checkbox */}
             <input
-              id={`power-${clientId}`}
+              id={`note-${clientId}`}
               type="checkbox"
               className="power-checkbox"
               checked={params.oscillatorEnabled}
               onChange={(e) => {
                 console.log(
-                  `[CONTROLLER] Checkbox changed to ${e.currentTarget.checked}`,
+                  `[CONTROLLER] Note checkbox changed to ${e.currentTarget.checked}`,
                 );
-                onParamChange("oscillatorEnabled", e.currentTarget.checked);
+                if (e.currentTarget.checked) {
+                  // Note On with current frequency
+                  onParamChange("note_on", params.frequency);
+                } else {
+                  // Note Off
+                  onParamChange("note_off", null);
+                }
               }}
             />
 
@@ -64,10 +70,16 @@ function SynthControls(
               }`}
               onClick={() => {
                 console.log(
-                  `[CONTROLLER] Power button clicked, current state: ${params.oscillatorEnabled}, new state: ${!params
+                  `[CONTROLLER] Note button clicked, current state: ${params.oscillatorEnabled}, new state: ${!params
                     .oscillatorEnabled}`,
                 );
-                onParamChange("oscillatorEnabled", !params.oscillatorEnabled);
+                if (!params.oscillatorEnabled) {
+                  // Note On with current frequency
+                  onParamChange("note_on", params.frequency);
+                } else {
+                  // Note Off
+                  onParamChange("note_off", null);
+                }
               }}
             >
               {params.oscillatorEnabled ? "ON" : "OFF"}
@@ -649,6 +661,48 @@ export default function Controller({ user }: ControllerProps) {
       return;
     }
 
+    // Handle special note_on and note_off commands
+    if (param === "note_on" || param === "note_off") {
+      // Send note message to client via data channel
+      const connection = connections.value.get(clientId);
+      if (
+        connection && connection.dataChannel &&
+        connection.dataChannel.readyState === "open"
+      ) {
+        try {
+          // For note_on, we send the frequency as the value
+          // For note_off, we don't need a value
+          connection.dataChannel.send(JSON.stringify({
+            type: param,  // "note_on" or "note_off"
+            ...(param === "note_on" ? { frequency: value } : {})
+          }));
+          
+          // Update oscillatorEnabled in UI state for visual feedback
+          const currentParams = client.synthParams || { ...DEFAULT_SYNTH_PARAMS };
+          const updatedParams = {
+            ...currentParams,
+            oscillatorEnabled: param === "note_on",
+          };
+          
+          // Update client in state
+          const updatedClient = {
+            ...client,
+            synthParams: updatedParams,
+          };
+          const newClients = new Map(clients.value);
+          newClients.set(clientId, updatedClient);
+          clients.value = newClients;
+          
+          addLog(`Sent ${param}${param === "note_on" ? ` with frequency=${value}` : ""} to ${clientId}`);
+        } catch (error) {
+          console.error(`Error sending ${param} to ${clientId}:`, error);
+        }
+      }
+      return;
+    }
+    
+    // Handle normal synth parameters
+    
     // Get current synth params or create new ones with defaults
     const currentParams = client.synthParams || { ...DEFAULT_SYNTH_PARAMS };
     console.log(`[CONTROLLER] Current params for ${clientId}:`, currentParams);
@@ -1371,8 +1425,73 @@ export default function Controller({ user }: ControllerProps) {
               });
 
               clients.value = newClients;
+              
+              // If client just enabled audio and we have oscillatorEnabled=true,
+              // send the oscillatorEnabled state again to ensure the client plays the note
+              if (!isMuted && client.synthParams && client.synthParams.oscillatorEnabled) {
+                console.log(`[CONTROLLER] Client ${clientId} enabled audio and has oscillatorEnabled=true, resending state`);
+                
+                const connection = connections.value.get(clientId);
+                if (connection && connection.dataChannel && connection.dataChannel.readyState === "open") {
+                  // Send oscillatorEnabled state to trigger note playback
+                  connection.dataChannel.send(JSON.stringify({
+                    type: "synth_param",
+                    param: "oscillatorEnabled",
+                    value: true
+                  }));
+                  
+                  addLog(`Resent oscillatorEnabled=true to ${clientId} after audio enabled`);
+                }
+              }
             }
 
+            return;
+          }
+          
+          // Handle request for current state
+          if (jsonMessage.type === "request_current_state") {
+            console.log(`[CONTROLLER] Received request for current state from ${clientId}`);
+            
+            try {
+              const client = clients.value.get(clientId);
+              
+              if (client && client.synthParams) {
+                console.log(`[CONTROLLER] Sending current state to ${clientId}`);
+                
+                // Send all synth parameters
+                const connection = connections.value.get(clientId);
+                
+                if (connection && connection.dataChannel && connection.dataChannel.readyState === "open") {
+                  // First send oscillatorEnabled state to trigger note on/off if needed
+                  if (client.synthParams.oscillatorEnabled) {
+                    connection.dataChannel.send(JSON.stringify({
+                      type: "synth_param",
+                      param: "oscillatorEnabled",
+                      value: true
+                    }));
+                    
+                    console.log(`[CONTROLLER] Sent oscillatorEnabled=true to ${clientId}`);
+                  }
+                  
+                  // Then send all other parameters
+                  Object.entries(client.synthParams).forEach(([param, value]) => {
+                    // Skip oscillatorEnabled as we already sent it
+                    if (param !== "oscillatorEnabled") {
+                      connection.dataChannel.send(JSON.stringify({
+                        type: "synth_param",
+                        param,
+                        value
+                      }));
+                    }
+                  });
+                  
+                  addLog(`Sent current synth state to ${clientId}`);
+                }
+              }
+            } catch (error) {
+              console.error(`[CONTROLLER] Error sending current state to ${clientId}:`, error);
+            }
+            
             return;
           }
         } catch (error) {
@@ -1380,6 +1499,55 @@ export default function Controller({ user }: ControllerProps) {
         }
       }
 
+      // Handle request_current_state messages
+      if (typeof message === "string" && message.includes("request_current_state")) {
+        console.log(`[CONTROLLER] Received request for current state from ${clientId}`);
+        
+        try {
+          const client = clients.value.get(clientId);
+          
+          if (client && client.synthParams) {
+            console.log(`[CONTROLLER] Sending current state to ${clientId}`);
+            
+            // Send all synth parameters
+            const connection = connections.value.get(clientId);
+            
+            if (connection && connection.dataChannel && connection.dataChannel.readyState === "open") {
+              // First send oscillatorEnabled state to trigger note on/off if needed
+              if (client.synthParams.oscillatorEnabled) {
+                connection.dataChannel.send(JSON.stringify({
+                  type: "synth_param",
+                  param: "oscillatorEnabled",
+                  value: true
+                }));
+                
+                console.log(`[CONTROLLER] Sent oscillatorEnabled=true to ${clientId}`);
+              }
+              
+              // Then send all other parameters
+              Object.entries(client.synthParams).forEach(([param, value]) => {
+                // Skip oscillatorEnabled as we already sent it
+                if (param !== "oscillatorEnabled") {
+                  connection.dataChannel.send(JSON.stringify({
+                    type: "synth_param",
+                    param,
+                    value
+                  }));
+                }
+              });
+              
+              addLog(`Sent current synth state to ${clientId}`);
+            }
+          }
+        } catch (error) {
+          console.error(`[CONTROLLER] Error sending current state to ${clientId}:`, error);
+        }
+        
+        // Update last seen timestamp
+        updateClientLastSeen(clientId);
+        return;
+      }
+      
       // DIRECT LATENCY CALCULATION FOR ANY MESSAGE THAT LOOKS LIKE A PONG
       // Accept any string that contains "PONG:" anywhere
       if (typeof message === "string" && message.includes("PONG:")) {
