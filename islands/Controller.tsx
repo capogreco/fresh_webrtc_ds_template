@@ -2,14 +2,14 @@ import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import type { SynthClient } from "../lib/types/client.ts";
 import {
-  SynthParams,
   DEFAULT_SYNTH_PARAMS,
   NOTE_FREQUENCIES,
+  noteToFrequency,
+  SynthParams,
+  validateDetune,
   validateFrequency,
   validateVolume,
-  validateDetune,
   validateWaveform,
-  noteToFrequency
 } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
 
@@ -80,9 +80,9 @@ function SynthControls(
           <label>Frequency</label>
           <select
             className="waveform-select waveform-select-compact"
-            value={Object.entries(NOTE_FREQUENCIES).find(([_, freq]) => 
-              Math.abs(freq - params.frequency) < 0.1)?.[0] || "A4"
-            }
+            value={Object.entries(NOTE_FREQUENCIES).find(([_, freq]) =>
+              Math.abs(freq - params.frequency) < 0.1
+            )?.[0] || "A4"}
             onChange={(e) => {
               // Convert note to frequency (physics-based approach)
               const freq = noteToFrequency(e.currentTarget.value);
@@ -90,7 +90,9 @@ function SynthControls(
             }}
           >
             {Object.entries(NOTE_FREQUENCIES).map(([note, freq]) => (
-              <option key={note} value={note}>{note} ({freq.toFixed(2)}Hz)</option>
+              <option key={note} value={note}>
+                {note} ({freq.toFixed(2)}Hz)
+              </option>
             ))}
           </select>
         </div>
@@ -206,7 +208,7 @@ function SynthControls(
             </div>
           </div>
         </div>
-        
+
         {/* Attack Knob - logarithmic scaling for more natural control */}
         <div className="control-group-compact">
           <label>Attack</label>
@@ -219,10 +221,10 @@ function SynthControls(
                 // Initial Y position
                 const startY = startEvent.clientY;
                 const startAttack = params.attack;
-                
+
                 // Logarithmic mapping for more intuitive control
                 const logStart = Math.log(Math.max(0.001, startAttack));
-                
+
                 // Function to handle mouse movement
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaY = startY - moveEvent.clientY;
@@ -230,11 +232,11 @@ function SynthControls(
                   const logMin = Math.log(0.001);
                   const logMax = Math.log(5);
                   const logRange = logMax - logMin;
-                  
+
                   const logChange = (deltaY / 100) * logRange;
                   const newLogValue = logStart + logChange;
                   const newAttack = Math.exp(newLogValue);
-                  
+
                   // Clamp to acceptable range
                   const clampedAttack = Math.max(0.001, Math.min(5, newAttack));
                   onParamChange("attack", clampedAttack);
@@ -252,19 +254,20 @@ function SynthControls(
               }}
               style={{
                 "--rotation": `${
-                  ((Math.log(Math.max(0.001, params.attack)) - Math.log(0.001)) / 
-                  (Math.log(5) - Math.log(0.001))) * 270 - 135
+                  ((Math.log(Math.max(0.001, params.attack)) -
+                      Math.log(0.001)) /
+                      (Math.log(5) - Math.log(0.001))) * 270 - 135
                 }deg`,
               } as any}
             />
             <div className="knob-value knob-value-compact">
-              {params.attack < 0.01 
-                ? `${Math.round(params.attack * 1000)}ms` 
+              {params.attack < 0.01
+                ? `${Math.round(params.attack * 1000)}ms`
                 : `${params.attack.toFixed(2)}s`}
             </div>
           </div>
         </div>
-        
+
         {/* Release Knob - logarithmic scaling for more natural control */}
         <div className="control-group-compact">
           <label>Release</label>
@@ -277,10 +280,10 @@ function SynthControls(
                 // Initial Y position
                 const startY = startEvent.clientY;
                 const startRelease = params.release;
-                
+
                 // Logarithmic mapping for more intuitive control
                 const logStart = Math.log(Math.max(0.001, startRelease));
-                
+
                 // Function to handle mouse movement
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaY = startY - moveEvent.clientY;
@@ -288,13 +291,16 @@ function SynthControls(
                   const logMin = Math.log(0.001);
                   const logMax = Math.log(10);
                   const logRange = logMax - logMin;
-                  
+
                   const logChange = (deltaY / 100) * logRange;
                   const newLogValue = logStart + logChange;
                   const newRelease = Math.exp(newLogValue);
-                  
+
                   // Clamp to acceptable range
-                  const clampedRelease = Math.max(0.001, Math.min(10, newRelease));
+                  const clampedRelease = Math.max(
+                    0.001,
+                    Math.min(10, newRelease),
+                  );
                   onParamChange("release", clampedRelease);
                 };
 
@@ -310,19 +316,20 @@ function SynthControls(
               }}
               style={{
                 "--rotation": `${
-                  ((Math.log(Math.max(0.001, params.release)) - Math.log(0.001)) / 
-                  (Math.log(10) - Math.log(0.001))) * 270 - 135
+                  ((Math.log(Math.max(0.001, params.release)) -
+                      Math.log(0.001)) /
+                      (Math.log(10) - Math.log(0.001))) * 270 - 135
                 }deg`,
               } as any}
             />
             <div className="knob-value knob-value-compact">
-              {params.release < 0.01 
-                ? `${Math.round(params.release * 1000)}ms` 
+              {params.release < 0.01
+                ? `${Math.round(params.release * 1000)}ms`
                 : `${params.release.toFixed(2)}s`}
             </div>
           </div>
         </div>
-        
+
         {/* Filter Cutoff Knob - logarithmic scaling for frequency */}
         <div className="control-group-compact">
           <label>Cutoff</label>
@@ -335,10 +342,10 @@ function SynthControls(
                 // Initial Y position
                 const startY = startEvent.clientY;
                 const startCutoff = params.filterCutoff;
-                
+
                 // Logarithmic mapping for more intuitive frequency control
                 const logStart = Math.log(Math.max(20, startCutoff));
-                
+
                 // Function to handle mouse movement
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaY = startY - moveEvent.clientY;
@@ -346,13 +353,16 @@ function SynthControls(
                   const logMin = Math.log(20);
                   const logMax = Math.log(20000);
                   const logRange = logMax - logMin;
-                  
+
                   const logChange = (deltaY / 100) * logRange;
                   const newLogValue = logStart + logChange;
                   const newCutoff = Math.exp(newLogValue);
-                  
+
                   // Clamp to acceptable range
-                  const clampedCutoff = Math.max(20, Math.min(20000, newCutoff));
+                  const clampedCutoff = Math.max(
+                    20,
+                    Math.min(20000, newCutoff),
+                  );
                   onParamChange("filterCutoff", clampedCutoff);
                 };
 
@@ -368,19 +378,20 @@ function SynthControls(
               }}
               style={{
                 "--rotation": `${
-                  ((Math.log(Math.max(20, params.filterCutoff)) - Math.log(20)) / 
-                  (Math.log(20000) - Math.log(20))) * 270 - 135
+                  ((Math.log(Math.max(20, params.filterCutoff)) -
+                      Math.log(20)) /
+                      (Math.log(20000) - Math.log(20))) * 270 - 135
                 }deg`,
               } as any}
             />
             <div className="knob-value knob-value-compact">
-              {params.filterCutoff < 1000 
-                ? `${Math.round(params.filterCutoff)}Hz` 
+              {params.filterCutoff < 1000
+                ? `${Math.round(params.filterCutoff)}Hz`
                 : `${(params.filterCutoff / 1000).toFixed(1)}kHz`}
             </div>
           </div>
         </div>
-        
+
         {/* Filter Resonance Knob */}
         <div className="control-group-compact">
           <label>Resonance</label>
@@ -393,7 +404,7 @@ function SynthControls(
                 // Initial Y position
                 const startY = startEvent.clientY;
                 const startResonance = params.filterResonance;
-                
+
                 // Function to handle mouse movement
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaY = startY - moveEvent.clientY;
@@ -425,7 +436,7 @@ function SynthControls(
             </div>
           </div>
         </div>
-        
+
         {/* Vibrato Rate Knob */}
         <div className="control-group-compact">
           <label>Vib Rate</label>
@@ -438,7 +449,7 @@ function SynthControls(
                 // Initial Y position
                 const startY = startEvent.clientY;
                 const startRate = params.vibratoRate;
-                
+
                 // Function to handle mouse movement
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaY = startY - moveEvent.clientY;
@@ -470,7 +481,7 @@ function SynthControls(
             </div>
           </div>
         </div>
-        
+
         {/* Vibrato Width Knob */}
         <div className="control-group-compact">
           <label>Vib Width</label>
@@ -483,7 +494,7 @@ function SynthControls(
                 // Initial Y position
                 const startY = startEvent.clientY;
                 const startWidth = params.vibratoWidth;
-                
+
                 // Function to handle mouse movement
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaY = startY - moveEvent.clientY;
@@ -515,7 +526,7 @@ function SynthControls(
             </div>
           </div>
         </div>
-        
+
         {/* Portamento Time Knob - logarithmic scaling for time */}
         <div className="control-group-compact">
           <label>Portamento</label>
@@ -528,12 +539,12 @@ function SynthControls(
                 // Initial Y position
                 const startY = startEvent.clientY;
                 const startPortamento = params.portamentoTime;
-                
+
                 // Logarithmic mapping for more intuitive control (0 is a special case)
-                const logStart = startPortamento === 0 
-                  ? Math.log(0.001)  // Special case for zero
+                const logStart = startPortamento === 0
+                  ? Math.log(0.001) // Special case for zero
                   : Math.log(Math.max(0.001, startPortamento));
-                
+
                 // Function to handle mouse movement
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaY = startY - moveEvent.clientY;
@@ -541,16 +552,16 @@ function SynthControls(
                   const logMin = Math.log(0.001);
                   const logMax = Math.log(5);
                   const logRange = logMax - logMin;
-                  
+
                   const logChange = (deltaY / 100) * logRange;
                   const newLogValue = logStart + logChange;
                   const newPortamento = Math.exp(newLogValue);
-                  
+
                   // Special handling for very small values - treat as zero
-                  const clampedPortamento = newPortamento < 0.01 
-                    ? 0  // Small values become zero (no portamento)
+                  const clampedPortamento = newPortamento < 0.01
+                    ? 0 // Small values become zero (no portamento)
                     : Math.min(5, newPortamento);
-                  
+
                   onParamChange("portamentoTime", clampedPortamento);
                 };
 
@@ -567,19 +578,20 @@ function SynthControls(
               onDoubleClick={() => onParamChange("portamentoTime", 0)} // Double click to reset to 0
               style={{
                 "--rotation": `${
-                  params.portamentoTime === 0 
-                    ? -135  // At minimum rotation when zero
-                    : ((Math.log(Math.max(0.001, params.portamentoTime)) - Math.log(0.001)) / 
-                      (Math.log(5) - Math.log(0.001))) * 270 - 135
+                  params.portamentoTime === 0
+                    ? -135 // At minimum rotation when zero
+                    : ((Math.log(Math.max(0.001, params.portamentoTime)) -
+                          Math.log(0.001)) /
+                          (Math.log(5) - Math.log(0.001))) * 270 - 135
                 }deg`,
               } as any}
             />
             <div className="knob-value knob-value-compact">
-              {params.portamentoTime === 0 
-                ? "Off" 
+              {params.portamentoTime === 0
+                ? "Off"
                 : params.portamentoTime < 0.01
-                  ? `${Math.round(params.portamentoTime * 1000)}ms`
-                  : `${params.portamentoTime.toFixed(2)}s`}
+                ? `${Math.round(params.portamentoTime * 1000)}ms`
+                : `${params.portamentoTime.toFixed(2)}s`}
             </div>
           </div>
         </div>
@@ -1178,13 +1190,13 @@ export default function Controller({ user }: ControllerProps) {
   // Start pinging a specific client to verify connection
   const startPingClient = (clientId: string) => {
     console.log(`Starting ping verification for client ${clientId}`);
-    
+
     // Send an immediate ping to verify the connection
     pingClient(clientId);
-    
+
     // Record connection time
     lastSuccessfulPing.set(clientId, Date.now());
-    
+
     // Update client status to show verified connection
     const client = clients.value.get(clientId);
     if (client) {
@@ -1570,7 +1582,7 @@ export default function Controller({ user }: ControllerProps) {
           case "offer":
             // Handle offers from clients trying to connect to us
             addLog(`Received offer from ${message.source}`);
-            
+
             // Check if this client exists in our list
             if (!clients.value.has(message.source)) {
               // Add the client if it doesn't exist
@@ -1581,18 +1593,21 @@ export default function Controller({ user }: ControllerProps) {
                 lastSeen: Date.now(),
                 synthParams: { ...DEFAULT_SYNTH_PARAMS },
               };
-              
+
               const updatedClients = new Map(clients.value);
               updatedClients.set(message.source, newClient);
               clients.value = updatedClients;
             }
-            
+
             // Handle the offer asynchronously
             (async () => {
               try {
                 await handleClientOffer(message);
               } catch (error) {
-                console.error(`Error handling offer from ${message.source}:`, error);
+                console.error(
+                  `Error handling offer from ${message.source}:`,
+                  error,
+                );
                 addLog(`Error handling offer: ${error.message}`);
               }
             })();
@@ -1713,7 +1728,7 @@ export default function Controller({ user }: ControllerProps) {
   const handleClientOffer = async (message: any) => {
     const clientId = message.source;
     console.log(`[CONTROLLER] Handling offer from client ${clientId}`, message);
-    
+
     // Get ICE servers from Twilio
     const iceServers = await fetchIceServers();
     console.log(
@@ -1722,41 +1737,43 @@ export default function Controller({ user }: ControllerProps) {
       ":",
       iceServers,
     );
-    
+
     // Create new RTCPeerConnection if it doesn't exist or reuse existing one
     let peerConnection: RTCPeerConnection;
     let dataChannel: RTCDataChannel | null = null;
-    
+
     if (connections.value.has(clientId)) {
       // If we already have a connection object but it's not connected, close it and create a new one
       const existingConnection = connections.value.get(clientId);
       if (existingConnection && existingConnection.peerConnection) {
         if (existingConnection.connected) {
-          console.log(`[CONTROLLER] Already connected to ${clientId}, ignoring offer`);
+          console.log(
+            `[CONTROLLER] Already connected to ${clientId}, ignoring offer`,
+          );
           return;
         }
-        
+
         // Close existing connection
         console.log(`[CONTROLLER] Closing existing connection to ${clientId}`);
         existingConnection.peerConnection.close();
       }
     }
-    
+
     // Create new connection
     peerConnection = new RTCPeerConnection({
       iceServers,
     });
-    
+
     // Store the connection in our map
     connections.value.set(clientId, {
       peerConnection,
       dataChannel,
       connected: false,
     });
-    
+
     // Force the signal to update
     connections.value = new Map(connections.value);
-    
+
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
       if (event.candidate && socket.value) {
@@ -1768,12 +1785,12 @@ export default function Controller({ user }: ControllerProps) {
         }));
       }
     };
-    
+
     // Handle data channel
     peerConnection.ondatachannel = (event) => {
       console.log(`[CONTROLLER] Received data channel from ${clientId}`);
       const receivedChannel = event.channel;
-      
+
       // Update our connection object
       const connInfo = connections.value.get(clientId);
       if (connInfo) {
@@ -1783,11 +1800,11 @@ export default function Controller({ user }: ControllerProps) {
         });
         connections.value = new Map(connections.value);
       }
-      
+
       receivedChannel.onopen = () => {
         console.log(`[CONTROLLER] Data channel opened with ${clientId}`);
         addLog(`Data channel opened with ${clientId}`);
-        
+
         // Update connection status
         const connInfo = connections.value.get(clientId);
         if (connInfo) {
@@ -1797,7 +1814,7 @@ export default function Controller({ user }: ControllerProps) {
           });
           connections.value = new Map(connections.value);
         }
-        
+
         // Update client status
         const client = clients.value.get(clientId);
         if (client) {
@@ -1809,15 +1826,15 @@ export default function Controller({ user }: ControllerProps) {
           });
           clients.value = newClients;
         }
-        
+
         // Start sending pings to verify connection
         startPingClient(clientId);
       };
-      
+
       receivedChannel.onclose = () => {
         console.log(`[CONTROLLER] Data channel closed with ${clientId}`);
         addLog(`Data channel closed with ${clientId}`);
-        
+
         // Update connection status
         const connInfo = connections.value.get(clientId);
         if (connInfo) {
@@ -1827,7 +1844,7 @@ export default function Controller({ user }: ControllerProps) {
           });
           connections.value = new Map(connections.value);
         }
-        
+
         // Update client status
         const client = clients.value.get(clientId);
         if (client) {
@@ -1839,29 +1856,32 @@ export default function Controller({ user }: ControllerProps) {
           clients.value = newClients;
         }
       };
-      
+
       receivedChannel.onmessage = (event) => {
-        console.log(`[CONTROLLER] Received message from ${clientId}:`, event.data);
-        
+        console.log(
+          `[CONTROLLER] Received message from ${clientId}:`,
+          event.data,
+        );
+
         // Update last seen timestamp
         updateClientLastSeen(clientId);
-        
+
         // Handle message
         handleClientMessage(event.data, clientId);
       };
     };
-    
+
     // Set remote description from offer
     console.log(`[CONTROLLER] Setting remote description for ${clientId}`);
     await peerConnection.setRemoteDescription(
-      new RTCSessionDescription(message.data)
+      new RTCSessionDescription(message.data),
     );
-    
+
     // Create and set local description (answer)
     console.log(`[CONTROLLER] Creating answer for ${clientId}`);
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
-    
+
     // Send answer to client
     if (socket.value) {
       console.log(`[CONTROLLER] Sending answer to ${clientId}`);
@@ -1873,7 +1893,7 @@ export default function Controller({ user }: ControllerProps) {
     } else {
       throw new Error("WebSocket not connected, cannot send answer");
     }
-    
+
     console.log(`[CONTROLLER] Successfully handled offer from ${clientId}`);
     addLog(`Answered offer from ${clientId}`);
   };

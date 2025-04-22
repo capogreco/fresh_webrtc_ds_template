@@ -3,14 +3,14 @@
  */
 
 // Import and re-export from the new synth library
-export { 
-  SynthParams,
-  OscillatorType,
+export {
   AudioState,
+  AudioStateMessage,
+  OscillatorType,
   SynthMessage,
   SynthMessageType,
   SynthParamMessage,
-  AudioStateMessage
+  SynthParams,
 } from "../synth/types.ts";
 
 export { DEFAULT_SYNTH_PARAMS as defaultSynthParams } from "../synth/defaults.ts";

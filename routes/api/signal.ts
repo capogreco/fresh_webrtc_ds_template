@@ -187,8 +187,10 @@ export const handler: Handlers = {
               return;
             }
 
-            console.log(`SIGNAL: ${message.type} message from ${clientId} to ${targetId}`);
-            
+            console.log(
+              `SIGNAL: ${message.type} message from ${clientId} to ${targetId}`,
+            );
+
             // Format signal message with source information
             const signalMessage = {
               type: message.type,
@@ -199,12 +201,16 @@ export const handler: Handlers = {
             // Try direct delivery if target is connected to this instance
             const targetSocket = activeConnections.get(targetId);
             if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-              console.log(`SIGNAL: Direct delivery of ${message.type} from ${clientId} to ${targetId}`);
+              console.log(
+                `SIGNAL: Direct delivery of ${message.type} from ${clientId} to ${targetId}`,
+              );
               targetSocket.send(JSON.stringify(signalMessage));
               console.log(`SIGNAL: Delivered ${message.type} to ${targetId}`);
             } else {
               // Queue message for later delivery
-              console.log(`SIGNAL: Target ${targetId} not connected, queuing message`);
+              console.log(
+                `SIGNAL: Target ${targetId} not connected, queuing message`,
+              );
               await queueMessage(targetId, signalMessage);
               console.log(`SIGNAL: Queued ${message.type} for ${targetId}`);
             }

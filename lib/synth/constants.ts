@@ -16,7 +16,7 @@ export const CONCERT_A4 = 440;
 export const OCTAVE_RATIO = 2;
 
 /** Semitone frequency ratio (12 equal temperament) */
-export const SEMITONE_RATIO = Math.pow(OCTAVE_RATIO, 1/12);
+export const SEMITONE_RATIO = Math.pow(OCTAVE_RATIO, 1 / 12);
 
 // Volume
 /** Minimum volume (silent) */
@@ -86,17 +86,17 @@ export const SAMPLE_RATE = 44100;
  * but our primary interface is the physics-based frequency.
  */
 export const NOTE_FREQUENCIES: Record<string, number> = {
-  "A4": 440.00,   // A4 (Concert A)
-  "A#4": 466.16,  // A#4/Bb4
-  "B4": 493.88,   // B4
-  "C5": 523.25,   // C5
-  "C#5": 554.37,  // C#5/Db5
-  "D5": 587.33,   // D5
-  "D#5": 622.25,  // D#5/Eb5
-  "E5": 659.25,   // E5
-  "F5": 698.46,   // F5
-  "F#5": 739.99,  // F#5/Gb5
-  "G5": 783.99,   // G5
-  "G#5": 830.61,  // G#5/Ab5
-  "A5": 880.00,   // A5
+  "A4": 440.00, // A4 (Concert A)
+  "A#4": 466.16, // A#4/Bb4
+  "B4": 493.88, // B4
+  "C5": 523.25, // C5
+  "C#5": 554.37, // C#5/Db5
+  "D5": 587.33, // D5
+  "D#5": 622.25, // D#5/Eb5
+  "E5": 659.25, // E5
+  "F5": 698.46, // F5
+  "F#5": 739.99, // F#5/Gb5
+  "G5": 783.99, // G5
+  "G#5": 830.61, // G#5/Ab5
+  "A5": 880.00, // A5
 };
