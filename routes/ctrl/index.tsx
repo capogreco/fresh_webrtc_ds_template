@@ -134,9 +134,33 @@ export const handler: Handlers = {
       }
 
       // Verify the session
-      const sessionData = await kv.get(["webrtc:sessions", sessionId]);
+      let sessionData;
+      try {
+        sessionData = await kv.get(["webrtc:sessions", sessionId]);
+      } catch (error) {
+        console.error("Error accessing KV store:", error);
 
-      if (!sessionData.value || (sessionData.value.expiresAt < Date.now())) {
+        // Check specifically for quota errors
+        if (error.message && error.message.includes("quota")) {
+          console.log("KV quota exceeded, redirecting to dev controller");
+          return new Response(null, {
+            status: 302,
+            headers: { Location: "/ctrl/dev" },
+          });
+        }
+
+        return ctx.render({
+          error:
+            "Database access error. Using development version is recommended.",
+          details: error.message,
+          quotaExceeded: error.message.includes("quota"),
+        });
+      }
+
+      if (
+        !sessionData || !sessionData.value ||
+        (sessionData.value.expiresAt < Date.now())
+      ) {
         // Session is invalid or expired
         if (!oauth2Client) {
           console.error("OAuth client not available");
@@ -175,7 +199,14 @@ export const handler: Handlers = {
       }
 
       // Check if controller is already locked
-      const controllerLock = await kv.get(CONTROLLER_LOCK_KEY);
+      let controllerLock;
+      try {
+        controllerLock = await kv.get(CONTROLLER_LOCK_KEY);
+      } catch (error) {
+        console.error("Error checking controller lock:", error);
+        // If it's a quota error, just proceed with no lock
+        controllerLock = { value: null };
+      }
 
       // Data to pass to the page
       const data = {
@@ -207,7 +238,20 @@ export default function ControllerPage({ data }: PageProps) {
     return (
       <div class="container">
         <h1>Error</h1>
-        <p>{data.error}</p>
+
+        {data.quotaExceeded
+          ? (
+            <div style="background-color: #ffe8cc; color: #7d4a00; padding: 16px; border-radius: 4px; margin-bottom: 20px; border: 1px solid #ffb459;">
+              <h3 style="margin-top: 0;">Deno KV Quota Exceeded</h3>
+              <p>
+                The application has reached its database read limit. The
+                development version will still work properly without requiring
+                database access.
+              </p>
+            </div>
+          )
+          : <p>{data.error}</p>}
+
         {data.details && (
           <div style="margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 4px;">
             <p>
@@ -226,7 +270,7 @@ export default function ControllerPage({ data }: PageProps) {
             class="activate-button"
             style="text-decoration: none; display: inline-block;"
           >
-            Try Development Version
+            Use Development Version
           </a>
         </div>
       </div>

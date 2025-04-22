@@ -20,8 +20,14 @@ const ALLOWED_EMAILS = [
   Deno.env.get("ALLOWED_EMAIL") || "your-email@example.com",
 ];
 
-// Open KV store
-const kv = await Deno.openKv();
+// Open KV store - with error handling
+let kv;
+try {
+  kv = await Deno.openKv();
+} catch (error) {
+  console.error("Error opening KV store:", error);
+  // We'll handle this in the handler
+}
 
 export const handler: Handlers = {
   async GET(req) {
@@ -76,12 +82,47 @@ export const handler: Handlers = {
       // Create a session
       const sessionId = crypto.randomUUID();
 
+      // Check if KV is available before trying to use it
+      if (!kv) {
+        console.log("KV not available, redirecting to dev controller instead");
+        const headers = new Headers();
+        headers.set("Location", "/ctrl/dev");
+        return new Response(null, {
+          status: 302,
+          headers,
+        });
+      }
+
       // Store session in KV
-      await kv.set(["webrtc:sessions", sessionId], {
-        email: userInfo.email,
-        name: userInfo.name,
-        expiresAt: Date.now() + 1000 * 60 * 60 * 24, // 24 hour expiry
-      }, { expireIn: 1000 * 60 * 60 * 24 });
+      try {
+        await kv.set(["webrtc:sessions", sessionId], {
+          email: userInfo.email,
+          name: userInfo.name,
+          expiresAt: Date.now() + 1000 * 60 * 60 * 24, // 24 hour expiry
+        }, { expireIn: 1000 * 60 * 60 * 24 });
+      } catch (error) {
+        console.error("Error storing session in KV:", error);
+
+        // If there's a KV error (like quota exceeded), redirect to dev version
+        if (error.message && error.message.includes("quota")) {
+          console.log("KV quota exceeded, redirecting to dev controller");
+          const headers = new Headers();
+          headers.set("Location", "/ctrl/dev");
+          return new Response(null, {
+            status: 302,
+            headers,
+          });
+        }
+
+        // For other errors, show an error page
+        return new Response(
+          `Authentication error: ${error.message}. <a href="/ctrl/dev">Try dev version</a>`,
+          {
+            status: 500,
+            headers: { "Content-Type": "text/html" },
+          },
+        );
+      }
 
       // Set session cookie
       const headers = new Headers();
@@ -99,7 +140,33 @@ export const handler: Handlers = {
       });
     } catch (error) {
       console.error("OAuth error:", error);
-      return new Response("Authentication failed", { status: 500 });
+
+      // If it's a KV quota error specifically, mention it and provide the dev link
+      if (error.message && error.message.includes("quota")) {
+        return new Response(
+          `<h2>KV Quota Exceeded</h2>
+           <p>The database read quota has been exceeded.</p>
+           <p><a href="/ctrl/dev">Continue to Development Version</a></p>`,
+          {
+            status: 302,
+            headers: {
+              "Content-Type": "text/html",
+              "Location": "/ctrl/dev",
+            },
+          },
+        );
+      }
+
+      // For other errors, show a generic error with a link to the dev version
+      return new Response(
+        `<h2>Authentication Failed</h2>
+         <p>Error: ${error.message}</p>
+         <p><a href="/ctrl/dev">Try Development Version</a></p>`,
+        {
+          status: 500,
+          headers: { "Content-Type": "text/html" },
+        },
+      );
     }
   },
 };
