@@ -7,12 +7,12 @@ export const handler: Handlers = {
     // Get session cookie
     const cookies = req.headers.get("cookie") || "";
     const sessionId = getCookieValue(cookies, "session");
-    
+
     // Clean up the session if it exists
     if (sessionId) {
       await kv.delete(["webrtc:sessions", sessionId]);
     }
-    
+
     // Clear cookie and redirect to login
     return new Response(null, {
       status: 302,

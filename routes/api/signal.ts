@@ -1,692 +1,236 @@
-import { Handlers } from "$fresh/server.ts"
-import { ulid } from "https://deno.land/x/ulid@v0.3.0/mod.ts"
+import { Handlers } from "$fresh/server.ts";
+import { ulid } from "https://deno.land/x/ulid@v0.3.0/mod.ts";
 
-// Open the KV store
-const kv = await Deno.openKv()
+// Open the KV store (used for message buffering and controller registration)
+const kv = await Deno.openKv();
 
-// Connection tracking with Deno KV
-// Using prefixes for string debugging, but we'll use arrays for actual keys
-const CONNECTIONS_PREFIX = "webrtc:connections:"
-const MESSAGES_PREFIX = "webrtc:messages:"
-const QUEUE_TTL_MS = 1000 * 60 * 5 // 5 minutes TTL for message queues
-const CLIENT_TTL_MS = 1000 * 60 * 10 // 10 minutes TTL for client records
-const CLIENT_GRACE_PERIOD_MS = 15000 // 15 seconds grace period for new clients
+// Message queue TTL - messages expire after 5 minutes
+const MESSAGE_TTL_MS = 1000 * 60 * 5;
 
-// Key prefixes for Deno KV (as arrays)
-const CONNECTION_KEY_PREFIX = ["webrtc", "connections"]
-const MESSAGE_KEY_PREFIX = ["webrtc", "messages"]
+// Key prefixes for KV store
+const MESSAGE_KEY_PREFIX = ["webrtc", "messages"];
+const CONTROLLER_KEY = ["webrtc", "controller", "active"];
 
 // Active WebSocket connections (in-memory per instance)
-const activeConnections = new Map<string, WebSocket>()
+const activeConnections = new Map<string, WebSocket>();
 
-// Keep track of message polling intervals
-const pollingIntervals = new Map<string, number>()
-
-// Track active controllers
-const activeControllers = new Set<string>()
-
-// Track clients with active WebRTC connections (controlled by controller)
-// Map of controller ID -> Set of client IDs with active connections
-const activeWebRTCConnections = new Map<string, Set<string>>()
-
-// Helper to get the connection key - ensure all parts are proper key types
-const getConnectionKey = (id: string) => CONNECTION_KEY_PREFIX.concat([id])
-
-// Helper to get the message queue key - ensure all parts are proper key types
-const getMessagesKey = (id: string) => MESSAGE_KEY_PREFIX.concat([id])
-
-// Store a message in the recipient's queue
-async function queueMessage(targetId: string, message: any) {
-  const messageId = ulid()
-  const messagesKey = getMessagesKey(targetId)
-  
-  // Store the message in the queue with TTL
-  // messageId needs to be added to the key
-  await kv.set([...messagesKey, messageId], message, { 
-    expireIn: QUEUE_TTL_MS 
-  })
-  
-  console.log(`Message queued for ${targetId}`)
+/**
+ * Register a controller in KV store
+ * Only one controller should be active at a time
+ */
+async function registerController(controllerId: string): Promise<void> {
+  // Store the controller ID in KV with timestamp
+  await kv.set(CONTROLLER_KEY, {
+    id: controllerId,
+    timestamp: Date.now(),
+  });
+  console.log(`Registered controller: ${controllerId}`);
 }
 
-// Retrieve and process pending messages for a client
-async function processMessages(clientId: string, socket: WebSocket) {
-  try {
-    // Get the message key prefix for this client
-    const messageKeyPrefix = getMessagesKey(clientId)
-    
-    // Get all pending messages for this client
-    const messages = kv.list({ prefix: messageKeyPrefix })
-    
-    let messageCount = 0
-    for await (const entry of messages) {
-      const message = entry.value
-      messageCount++
-      
-      // Send the message to the client
-      socket.send(JSON.stringify(message))
-      console.log(`Delivered message to ${clientId}`)
-      
-      // Delete the message from the queue
-      await kv.delete(entry.key)
-    }
-    
-    if (messageCount > 0) {
-      console.log(`Processed ${messageCount} messages for client ${clientId}`)
-    }
-  } catch (error) {
-    console.error("Error processing messages:", error)
+/**
+ * Unregister a controller from KV store
+ */
+async function unregisterController(controllerId: string): Promise<void> {
+  // Get current controller to verify it's the one being unregistered
+  const controller = await kv.get(CONTROLLER_KEY);
+
+  if (controller.value && controller.value.id === controllerId) {
+    await kv.delete(CONTROLLER_KEY);
+    console.log(`Unregistered controller: ${controllerId}`);
   }
 }
 
-// Controller-related constants and state
-const ACTIVE_CONTROLLER_KEY = ["webrtc", "active", "controller"]
-const CONTROLLER_PREFIX = "controller-"
-
-// Check if a client ID is a controller
-function isController(id: string): boolean {
-  return id.startsWith(CONTROLLER_PREFIX)
-}
-
-// Set the active controller
-async function setActiveController(controllerId: string | null) {
-  if (controllerId) {
-    // Store the active controller with timestamp in KV
-    await kv.set(ACTIVE_CONTROLLER_KEY, { 
-      id: controllerId,
-      timestamp: Date.now(),
-      instanceId: Deno.env.get("DENO_DEPLOYMENT_ID") || "local"
-    })
-    console.log(`Set active controller: ${controllerId} (instance: ${Deno.env.get("DENO_DEPLOYMENT_ID") || "local"})`)
-  } else {
-    // Remove the active controller
-    await kv.delete(ACTIVE_CONTROLLER_KEY)
-    console.log("Cleared active controller")
-  }
-}
-
-// Get the active controller
+/**
+ * Get the currently active controller
+ */
 async function getActiveController(): Promise<string | null> {
-  const controller = await kv.get(ACTIVE_CONTROLLER_KEY)
-  return controller.value ? controller.value.id : null
+  const controller = await kv.get(CONTROLLER_KEY);
+  return controller.value ? controller.value.id : null;
 }
 
-// Function to check if a client has any active WebRTC connections with any controller
-function hasActiveWebRTCConnection(clientId: string): boolean {
-  // Check all controllers for this client
-  for (const [_, connectedClients] of activeWebRTCConnections.entries()) {
-    if (connectedClients.has(clientId)) {
-      return true;
-    }
-  }
-  return false;
+/**
+ * Queue a message for a peer that is currently offline
+ * Messages are stored with TTL and delivered when the peer connects
+ */
+async function queueMessage(
+  targetId: string,
+  message: Record<string, unknown>,
+) {
+  const messageId = ulid();
+  const messagesKey = [...MESSAGE_KEY_PREFIX, targetId, messageId];
+
+  // Store message with TTL - automatically expires if not delivered
+  await kv.set(messagesKey, message, { expireIn: MESSAGE_TTL_MS });
+  console.log(`Message queued for ${targetId}`);
 }
 
-// Function to clean up based on WebRTC connections
-async function cleanupBasedOnWebRTCConnections() {
-  console.log("===== CLEANING UP CLIENTS WITHOUT WEBRTC CONNECTIONS =====");
-  
-  // First gather all clients with active WebRTC connections from all controllers
-  const clientsWithActiveConnections = new Set<string>();
-  for (const [controllerId, connections] of activeWebRTCConnections.entries()) {
-    console.log(`Controller ${controllerId} has connections to:`, Array.from(connections));
-    connections.forEach(clientId => clientsWithActiveConnections.add(clientId));
-  }
-  
-  console.log("Clients with active WebRTC connections:", Array.from(clientsWithActiveConnections));
-  
-  const clientsToRemove = []; // Track clients for cleanup
-  let totalClients = 0;
-  
+/**
+ * Process any queued messages for a peer that just connected
+ */
+async function deliverQueuedMessages(clientId: string, socket: WebSocket) {
   try {
-    // Use the CONNECTION_KEY_PREFIX array for proper KV listing
-    const connectionEntries = kv.list({ prefix: CONNECTION_KEY_PREFIX });
-    
-    // Find all non-controller clients
-    for await (const entry of connectionEntries) {
-      totalClients++;
-      
-      // The last element of the key array is the client ID
-      const id = entry.key[entry.key.length - 1];
-      
-      // Skip controllers (making sure id is a string)
-      const clientId = id.toString();
-      if (isController(clientId)) {
-        console.log(`Found controller ${clientId} - skipping cleanup`);
-        continue;
-      }
-      
-      console.log(`Checking synth client: ${clientId}`);
-      
-      // Check if the client is within its connection grace period
-      const now = Date.now();
-      const connectionTimestamp = entry.value.connectionTimestamp || 0;
-      const timeSinceConnection = now - connectionTimestamp;
-      const isInGracePeriod = timeSinceConnection < CLIENT_GRACE_PERIOD_MS;
-      
-      if (isInGracePeriod) {
-        console.log(`Synth client ${clientId} is in grace period (${timeSinceConnection}ms) - keeping`);
-        continue;
-      }
-      
-      // IMPORTANT: Only keep clients with active WebRTC connections to controllers
-      if (!clientsWithActiveConnections.has(clientId)) {
-        console.log(`Synth client ${clientId} has NO WebRTC connections - WILL REMOVE`);
-        clientsToRemove.push({
-          key: entry.key,
-          id: clientId
-        });
-      } else {
-        console.log(`Synth client ${clientId} has active WebRTC connection - keeping`);
-      }
-    }
-    
-    console.log(`Found total of ${totalClients} clients, ${clientsToRemove.length} to remove`);
-    
-    // Clean up all inactive synth clients
-    if (clientsToRemove.length > 0) {
-      console.log(`Cleaning up ${clientsToRemove.length} clients without WebRTC connections`);
-      
-      for (const client of clientsToRemove) {
-        try {
-          console.log(`Removing client: ${client.id}`);
-          // Perform the actual deletion from KV store
-          await kv.delete(client.key);
-          
-          // Notify controllers about this client disconnection
-          notifyControllers('client-disconnected', {
-            clientId: client.id
-          });
-        } catch (error) {
-          console.error(`Error removing client ${client.id}:`, error);
-        }
-      }
-      
-      console.log(`Cleanup completed - removed ${clientsToRemove.length} clients`);
-      return clientsToRemove.length;
-    }
-    
-    console.log("No clients without WebRTC connections to clean up");
-    return 0;
-  } catch (error) {
-    console.error("Error during client cleanup:", error);
-    return 0;
-  }
-}
+    const prefix = [...MESSAGE_KEY_PREFIX, clientId];
+    const messagesIterator = kv.list({ prefix });
 
-// Legacy function - now we use cleanupBasedOnWebRTCConnections instead
-async function cleanupInactiveClients() {
-  return cleanupBasedOnWebRTCConnections();
-}
-
-// Get a list of all connected clients (for controllers)
-async function getConnectedClients() {
-  const clients = []
-  const now = Date.now()
-  const staleClientKeys = [] // Track stale clients for cleanup
-  
-  // Use the CONNECTION_KEY_PREFIX array for proper KV listing
-  const connectionEntries = kv.list({ prefix: CONNECTION_KEY_PREFIX })
-  
-  // Gather entries
-  for await (const entry of connectionEntries) {
-    // The last element of the key array is the client ID
-    const id = entry.key[entry.key.length - 1]
-    
-    // Skip controllers (making sure id is a string)
-    const clientId = id.toString()
-    if (isController(clientId)) {
-      continue
-    }
-    
-    // Check if this client is stale (not seen in a while)
-    const lastSeen = entry.value.lastSeen || 0
-    const timeSinceLastSeen = now - lastSeen
-    
-    // We'll accept all clients here, no automatic cleanup during regular client listing
-    console.log(`Found client: ${clientId}, last seen ${timeSinceLastSeen}ms ago`)
-    
-    // Get connection timestamp info
-    const connectionTimestamp = entry.value.connectionTimestamp || lastSeen;
-    const timeSinceConnection = now - connectionTimestamp;
-    const isInGracePeriod = timeSinceConnection < CLIENT_GRACE_PERIOD_MS;
-    
-    // Add to client list with more info
-    clients.push({
-      id: clientId,
-      connected: false, // Will be set correctly by the controller's own tracking
-      lastSeen: lastSeen,
-      connectionTimestamp: connectionTimestamp,
-      isInGracePeriod: isInGracePeriod
-    })
-  }
-  
-  console.log(`Returning ${clients.length} clients: ${clients.map(c => c.id).join(', ')}`)
-  return clients
-}
-
-// Register a new connection
-async function registerConnection(id: string, socket: WebSocket) {
-  const connectionKey = getConnectionKey(id)
-  const isControllerClient = isController(id)
-  
-  const now = Date.now()
-  // Store instance ID - we just need to know the connection exists
-  const instanceId = Deno.env.get("DENO_DEPLOYMENT_ID") || "local"
-  await kv.set(connectionKey, {
-    instanceId,
-    lastSeen: now,
-    connectionTimestamp: now, // Track when client first connected
-    isController: isControllerClient
-  }, { expireIn: CLIENT_TTL_MS })
-  
-  // Store in local memory
-  activeConnections.set(id, socket)
-  
-  // If it's a controller, add to our controller set and store in KV
-  if (isControllerClient) {
-    // Add to local set
-    activeControllers.add(id)
-    
-    // Also store in KV so other instances know about this controller
-    const controllerKey = ["webrtc", "controllers", id]
-    await kv.set(controllerKey, {
-      instanceId,
-      lastSeen: Date.now()
-    }, { expireIn: CLIENT_TTL_MS })
-    
-    console.log(`Registered controller ${id} in KV for cross-instance visibility`)
-  } else {
-    // Notify all controllers about the new client
-    await notifyControllers('client-connected', {
-      client: {
-        id,
-        connected: false,
-        lastSeen: Date.now()
+    let count = 0;
+    for await (const entry of messagesIterator) {
+      // Deliver the message
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(entry.value));
+        count++;
       }
-    })
-  }
-  
-  // Set up polling for messages
-  if (!pollingIntervals.has(id)) {
-    const intervalId = setInterval(() => {
-      processMessages(id, socket)
-    }, 500) // Poll every 500ms
-    
-    pollingIntervals.set(id, intervalId)
-  }
-}
 
-// Unregister a connection
-async function unregisterConnection(id: string) {
-  if (!id) return
-  
-  console.log(`Unregistering connection for ${id}`)
-  
-  const connectionKey = getConnectionKey(id)
-  const isControllerClient = isController(id)
-  
-  try {
-    // Remove from KV
-    await kv.delete(connectionKey)
-    
-    // Remove from local memory
-    activeConnections.delete(id)
-    
-    // If it's a controller, remove from our controller set and KV
-    if (isControllerClient) {
-      // Remove from local set
-      activeControllers.delete(id)
-      
-      // Also remove from KV
-      const controllerKey = ["webrtc", "controllers", id]
-      await kv.delete(controllerKey)
-      
-      console.log(`Removed controller ${id} from local set and KV`)
-    } else {
-      // Notify all controllers about the client disconnection
-      console.log(`Broadcasting client disconnection: ${id}`)
-      await notifyControllers('client-disconnected', {
-        clientId: id
-      })
+      // Delete the message from the queue
+      await kv.delete(entry.key);
     }
-    
-    // Clear polling interval
-    const intervalId = pollingIntervals.get(id)
-    if (intervalId) {
-      clearInterval(intervalId)
-      pollingIntervals.delete(id)
-    }
-    
-    console.log(`Successfully unregistered: ${id}`)
-  } catch (error) {
-    console.error(`Error unregistering connection ${id}:`, error)
-  }
-}
 
-// Send a notification to all active controllers
-async function notifyControllers(type: string, data: any) {
-  // Create the message
-  const message = {
-    type,
-    ...data
-  }
-  
-  try {
-    // Get all active controllers from KV to ensure we notify controllers on all instances
-    const controllerKey = ["webrtc", "controllers"];
-    const controllersData = kv.list({ prefix: controllerKey });
-    
-    // Local tracking of notified controllers to avoid duplicates
-    const notifiedControllers = new Set<string>();
-    
-    // First notify controllers connected to this instance directly
-    for (const controllerId of activeControllers) {
-      const socket = activeConnections.get(controllerId);
-      
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(message));
-        console.log(`Notified controller ${controllerId} directly`);
-      } else {
-        await queueMessage(controllerId, message);
-        console.log(`Queued notification for controller ${controllerId}`);
-      }
-      
-      notifiedControllers.add(controllerId);
-    }
-    
-    // Then check KV for controllers on other instances
-    for await (const entry of controllersData) {
-      const controllerId = entry.key[entry.key.length - 1].toString();
-      
-      // Skip if we've already notified this controller
-      if (notifiedControllers.has(controllerId)) {
-        continue;
-      }
-      
-      // Queue message for controllers on other instances
-      await queueMessage(controllerId, message);
-      console.log(`Queued notification for controller ${controllerId} (other instance)`);
+    if (count > 0) {
+      console.log(`Delivered ${count} queued messages to ${clientId}`);
     }
   } catch (error) {
-    console.error("Error notifying controllers:", error);
+    console.error(`Error delivering queued messages to ${clientId}:`, error);
   }
 }
 
 export const handler: Handlers = {
   GET: async (req) => {
-    const url = new URL(req.url)
-    const upgrade = req.headers.get("upgrade") || ""
-    
+    const url = new URL(req.url);
+    const upgrade = req.headers.get("upgrade") || "";
+
     if (upgrade.toLowerCase() !== "websocket") {
-      return new Response("Expected WebSocket", { status: 400 })
+      return new Response("Expected WebSocket", { status: 400 });
     }
-    
-    const { socket, response } = Deno.upgradeWebSocket(req)
-    
-    let clientId: string | null = null
-    
+
+    const { socket, response } = Deno.upgradeWebSocket(req);
+    let clientId: string | null = null;
+
     socket.onopen = () => {
-      console.log("WebSocket connection opened")
-    }
-    
+      console.log("WebSocket connection opened");
+    };
+
     socket.onmessage = async (event) => {
       try {
-        const message = JSON.parse(event.data)
-        
-        // Update the lastSeen timestamp for this client whenever we receive a message
-        if (clientId) {
-          const connectionKey = getConnectionKey(clientId)
-          const existingData = await kv.get(connectionKey)
-          
-          if (existingData.value) {
-            // Preserve the original connection timestamp
-            const connectionTimestamp = existingData.value.connectionTimestamp || Date.now()
-            // Update the lastSeen timestamp
-            await kv.set(connectionKey, {
-              ...existingData.value,
-              lastSeen: Date.now(),
-              connectionTimestamp // Keep the original connection time
-            }, { expireIn: CLIENT_TTL_MS })
-          }
+        // Check for empty or non-text messages
+        if (!event.data || typeof event.data !== "string") {
+          console.log("Received invalid message data:", event.data);
+          return;
         }
-        
+
+        // Parse the message and validate
+        const message = JSON.parse(event.data);
+
+        // Ensure message and type exist
+        if (!message || !message.type) {
+          console.log("Received message with missing type:", message);
+          return;
+        }
+
         switch (message.type) {
-          case 'register':
-            clientId = message.id
-            await registerConnection(clientId, socket)
-            console.log(`Client registered with ID: ${clientId}`)
-            
-            // Process any pending messages right away
-            await processMessages(clientId, socket)
-            
-            // Handle different client types
-            if (isController(clientId)) {
-              // If this is a controller, send the list of clients right away
-              const clients = await getConnectedClients()
-              socket.send(JSON.stringify({
-                type: 'client-list',
-                clients
-              }))
-            } else {
-              // Regular client - check if there's an active controller
-              const activeControllerId = await getActiveController()
-              if (activeControllerId) {
-                // Send the active controller ID to the client
-                socket.send(JSON.stringify({
-                  type: 'active-controller',
-                  controllerId: activeControllerId
-                }))
-              }
+          case "register":
+            // Register the client with its ID
+            clientId = message.id;
+            activeConnections.set(clientId, socket);
+            console.log(`Client registered with ID: ${clientId}`);
+
+            // Check if this is a controller client (based on ID prefix)
+            if (clientId.startsWith("controller-")) {
+              console.log(`Detected controller client: ${clientId}`);
+              // Register as active controller
+              await registerController(clientId);
+              console.log(`Controller registration complete: ${clientId}`);
             }
-            break
-            
-          case 'controller-heartbeat':
-            // Controller is requesting updates - send client list
-            if (clientId && isController(clientId)) {
-              // First cleanup inactive clients to provide a clean list
-              console.log("Controller heartbeat - refreshing client list");
-              await cleanupInactiveClients();
-              
-              // Send the clean list
-              const clients = await getConnectedClients();
-              socket.send(JSON.stringify({
-                type: 'client-list',
-                clients
-              }));
-              console.log(`Sent refreshed client list to controller: ${clients.length} clients`);
-            }
-            break
-            
-          case 'controller-activate':
-            // Controller is activating - set as active controller
-            if (clientId && isController(clientId)) {
-              console.log("=== CONTROLLER ACTIVATION ===");
-              console.log(`Controller ${clientId} activating - current active connections:`, Array.from(activeConnections.keys()));
-              
-              await setActiveController(clientId);
-              
-              // Clean up inactive clients when a controller becomes active, but with a delay
-              console.log("Scheduling cleanup of inactive clients with delay");
-              
-              // First, immediately send the client list without cleanup
-              socket.send(JSON.stringify({
-                type: 'client-list',
-                clients: await getConnectedClients()
-              }));
-              console.log("Sent initial client list to controller");
-              
-              // Then schedule the cleanup with a delay to allow clients to establish connections
-              setTimeout(async () => {
-                console.log("Executing delayed cleanup of inactive clients");
-                const removedCount = await cleanupInactiveClients();
-                console.log(`Delayed cleanup completed - removed ${removedCount} inactive clients`);
-                
-                // Force the controller to request an updated client list after cleanup
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send(JSON.stringify({
-                    type: 'client-list',
-                    clients: await getConnectedClients()
-                  }));
-                  console.log("Sent updated client list to controller after cleanup");
-                }
-              }, CLIENT_GRACE_PERIOD_MS); // Use the same grace period for consistency
-              
-              // Get the clean list of clients for notifications
-              const regularClients = await getConnectedClients();
-              console.log(`After cleanup: ${regularClients.length} active clients remaining`);
-              
-              // Notify all regular clients about the new controller
-              for (const client of regularClients) {
-                if (client.id) {
-                  const targetSocket = activeConnections.get(client.id);
-                  if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    targetSocket.send(JSON.stringify({
-                      type: 'active-controller',
-                      controllerId: clientId
-                    }));
-                    console.log(`Notified client ${client.id} about controller activation (direct)`);
-                  } else {
-                    await queueMessage(client.id, {
-                      type: 'active-controller',
-                      controllerId: clientId
-                    });
-                    console.log(`Queued notification for client ${client.id} about controller activation`);
-                  }
-                }
-              }
-            }
-            break
-            
-          case 'controller-deactivate':
-            // Controller is deactivating
-            if (clientId && isController(clientId)) {
-              // Check if this is the current active controller
-              const activeController = await getActiveController()
-              if (activeController === clientId) {
-                await setActiveController(null)
-                
-                // Notify all clients that no controller is active
-                const regularClients = await getConnectedClients()
-                for (const client of regularClients) {
-                  if (client.id) {
-                    const targetSocket = activeConnections.get(client.id)
-                    if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                      targetSocket.send(JSON.stringify({
-                        type: 'active-controller',
-                        controllerId: null
-                      }))
-                    } else {
-                      await queueMessage(client.id, {
-                        type: 'active-controller',
-                        controllerId: null
-                      })
-                    }
-                  }
-                }
-              }
-            }
-            break
-            
-          case 'controller-connections':
-            // Controller is reporting its active WebRTC connections
-            if (clientId && isController(clientId)) {
-              const connections = message.connections || [];
-              console.log(`Controller ${clientId} reported ${connections.length} active WebRTC connections:`, connections);
-              
-              // Store the controller's active connections
-              activeWebRTCConnections.set(clientId, new Set(connections));
-              
-              // Only run cleanup if it's been at least half the grace period since controller activated
-              // This provides a balance between keeping the connection list clean and giving clients time to connect
-              const activeController = await getActiveController();
-              if (activeController === clientId) {
-                const controllerKey = ["webrtc", "active", "controller"];
-                const controllerData = await kv.get(controllerKey);
-                
-                if (controllerData.value && controllerData.value.timestamp) {
-                  const timeSinceActivation = Date.now() - controllerData.value.timestamp;
-                  if (timeSinceActivation > CLIENT_GRACE_PERIOD_MS / 2) {
-                    console.log(`Controller has been active for ${timeSinceActivation}ms, running cleanup`);
-                    // Now clean up any inactive clients (those not connected to any controller)
-                    await cleanupBasedOnWebRTCConnections();
-                  } else {
-                    console.log(`Controller recently activated (${timeSinceActivation}ms ago), skipping cleanup`);
-                  }
-                } else {
-                  // If we can't determine the activation time, still run cleanup
-                  await cleanupBasedOnWebRTCConnections();
-                }
-              } else {
-                // If this controller isn't the active one, still run cleanup
-                await cleanupBasedOnWebRTCConnections();
-              }
-            }
-            break
-            
-          case 'heartbeat':
-            // Client is sending a heartbeat to keep the connection alive
-            if (clientId) {
-              // Update the lastSeen timestamp
-              const connectionKey = getConnectionKey(clientId)
-              const existingData = await kv.get(connectionKey)
-              
-              if (existingData.value) {
-                // Update the lastSeen timestamp but preserve original connection timestamp
-                const connectionTimestamp = existingData.value.connectionTimestamp || Date.now()
-                await kv.set(connectionKey, {
-                  ...existingData.value,
-                  lastSeen: Date.now(),
-                  connectionTimestamp // Preserve the original connection time
-                }, { expireIn: CLIENT_TTL_MS })
-                
-                console.log(`Updated heartbeat for client ${clientId}`)
-              }
-            }
-            break
-            
-          case 'offer':
-          case 'answer':
-          case 'ice-candidate':
+
+            // Deliver any queued messages immediately
+            await deliverQueuedMessages(clientId, socket);
+            break;
+
+          case "get-controller":
+            // Client is requesting the active controller
             if (!clientId) {
-              console.error("Client not registered")
-              return
+              console.error("Client not registered");
+              return;
             }
+
+            // Get the current active controller
+            const activeController = await getActiveController();
+
+            // Send the controller info back to the client
+            socket.send(JSON.stringify({
+              type: "controller-info",
+              controllerId: activeController,
+            }));
+
+            console.log(
+              `Sent controller info to ${clientId}: ${
+                activeController || "none"
+              }`,
+            );
+            break;
+
+          case "heartbeat":
+            // Simple heartbeat to keep connection alive - no state tracking
+            // Client ID must be set by a previous register message
+            break;
+
+          // Core WebRTC Signaling Messages - pure relay
+          case "offer":
+          case "answer":
+          case "ice-candidate":
+            if (!clientId) {
+              console.error("Client not registered");
+              return;
+            }
+
+            const targetId = message.target;
+            if (!targetId) {
+              console.error("Target ID missing in message");
+              return;
+            }
+
+            console.log(`SIGNAL: ${message.type} message from ${clientId} to ${targetId}`);
             
-            const targetId = message.target
-            
-            // Try local delivery first (if target is connected to this instance)
-            const targetSocket = activeConnections.get(targetId)
+            // Format signal message with source information
+            const signalMessage = {
+              type: message.type,
+              data: message.data,
+              source: clientId,
+            };
+
+            // Try direct delivery if target is connected to this instance
+            const targetSocket = activeConnections.get(targetId);
             if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-              targetSocket.send(JSON.stringify({
-                type: message.type,
-                data: message.data,
-                source: clientId
-              }))
-              console.log(`Direct delivery to ${targetId}`)
+              console.log(`SIGNAL: Direct delivery of ${message.type} from ${clientId} to ${targetId}`);
+              targetSocket.send(JSON.stringify(signalMessage));
+              console.log(`SIGNAL: Delivered ${message.type} to ${targetId}`);
             } else {
-              // Otherwise, queue the message in KV
-              await queueMessage(targetId, {
-                type: message.type,
-                data: message.data,
-                source: clientId
-              })
+              // Queue message for later delivery
+              console.log(`SIGNAL: Target ${targetId} not connected, queuing message`);
+              await queueMessage(targetId, signalMessage);
+              console.log(`SIGNAL: Queued ${message.type} for ${targetId}`);
             }
-            break
-            
+            break;
+
           default:
-            console.log(`Unknown message type: ${message.type}`)
+            console.log(`Unknown message type: ${message.type}`);
         }
       } catch (error) {
-        console.error("Error handling WebSocket message:", error)
+        console.error("Error handling WebSocket message:", error);
       }
-    }
-    
+    };
+
     socket.onclose = async () => {
-      await unregisterConnection(clientId)
-      console.log(`Client disconnected: ${clientId}`)
-    }
-    
-    return response
-  }
-}
+      // Simple connection cleanup - remove from active connections
+      if (clientId) {
+        activeConnections.delete(clientId);
+        console.log(`Client disconnected: ${clientId}`);
+
+        // If this was a controller, unregister it
+        if (clientId.startsWith("controller-")) {
+          await unregisterController(clientId);
+        }
+      }
+    };
+
+    return response;
+  },
+};

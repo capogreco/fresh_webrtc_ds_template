@@ -32,5 +32,3 @@ jobs:
           project: "fresh-webrt-ds-template"
           entrypoint: "main.ts"
           root: "."
-          
-          

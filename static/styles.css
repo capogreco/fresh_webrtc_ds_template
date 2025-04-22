@@ -1,4 +1,3 @@
-
 *,
 *::before,
 *::after {
@@ -14,8 +13,15 @@ button, [role="button"] {
   cursor: pointer;
 }
 code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
   font-size: 1em;
 }
 img,
@@ -31,9 +37,21 @@ video {
 html {
   line-height: 1.5;
   -webkit-text-size-adjust: 100%;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "Noto Sans",
+    sans-serif,
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    "Noto Color Emoji";
 }
 
 :root {
@@ -49,7 +67,13 @@ html {
 }
 
 body {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
   color: var(--text-color);
   max-width: 800px;
   margin: 0 auto;
@@ -100,6 +124,12 @@ h1 {
 .status-connected {
   background-color: rgba(56, 161, 105, 0.2);
   color: #48bb78;
+}
+
+.status-verified {
+  background-color: rgba(56, 161, 105, 0.5);
+  color: #48bb78;
+  border: 1px solid #48bb78;
 }
 
 .status-disconnected {
@@ -269,6 +299,34 @@ button:disabled {
 
 .deactivate-button:hover {
   background-color: #c53030;
+}
+
+.take-control-button {
+  background-color: #ff3b30;
+  color: white;
+  font-weight: bold;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-right: 10px;
+}
+
+.take-control-button:hover {
+  background-color: #d9342b;
+}
+
+.controller-buttons {
+  display: flex;
+  margin-top: 10px;
+}
+
+.other-controller-active {
+  padding: 15px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background-color: rgba(33, 38, 45, 0.6);
+  margin-bottom: 20px;
 }
 
 .connect-button {
@@ -443,11 +501,19 @@ button:disabled {
   gap: 6px;
   min-width: auto;
   flex-direction: row;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .control-group-compact label {
   font-size: 11px;
   min-width: 50px;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .waveform-select-compact {
@@ -667,7 +733,7 @@ button:disabled {
   right: 0;
   bottom: 0;
   background-color: var(--input-bg-color);
-  transition: .4s;
+  transition: 0.4s;
   border-radius: 20px;
   border: 1px solid var(--border-color);
 }
@@ -680,7 +746,7 @@ button:disabled {
   left: 2px;
   bottom: 1px;
   background-color: white;
-  transition: .4s;
+  transition: 0.4s;
   border-radius: 50%;
 }
 
@@ -720,7 +786,7 @@ input:checked + .slider:before {
 }
 
 .power-checkbox:checked::after {
-  content: '✓';
+  content: "✓";
   font-size: 14px;
   color: white;
   position: absolute;
@@ -810,6 +876,10 @@ input:checked + .slider:before {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   overflow: hidden;
   cursor: ns-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 /* Special styling for the detune knob */
@@ -853,6 +923,10 @@ input:checked + .slider:before {
   color: var(--text-color);
   width: 100%;
   text-align: center;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .mini-controls {
