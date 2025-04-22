@@ -1,21 +1,21 @@
 import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { 
-  SynthParams, 
-  validateFrequency,
-  validateVolume,
-  validateDetune,
-  validateWaveform,
-  validateAttack,
-  validateRelease,
-  validateFilterCutoff,
-  validateFilterResonance,
-  validateVibratoRate,
-  validateVibratoWidth,
-  validatePortamentoTime,
+import {
   DEFAULT_SYNTH_PARAMS,
   frequencyToNote,
-  noteToFrequency
+  noteToFrequency,
+  SynthParams,
+  validateAttack,
+  validateDetune,
+  validateFilterCutoff,
+  validateFilterResonance,
+  validateFrequency,
+  validatePortamentoTime,
+  validateRelease,
+  validateVibratoRate,
+  validateVibratoWidth,
+  validateVolume,
+  validateWaveform,
 } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
 import { Signal } from "@preact/signals";
@@ -53,11 +53,13 @@ export default function WebRTC() {
   // Synth parameters using the physics-based approach
   const frequency = useSignal(DEFAULT_SYNTH_PARAMS.frequency);
   const waveform = useSignal<OscillatorType>(DEFAULT_SYNTH_PARAMS.waveform);
-  const volume = useSignal(DEFAULT_SYNTH_PARAMS.volume); 
+  const volume = useSignal(DEFAULT_SYNTH_PARAMS.volume);
   const oscillatorEnabled = useSignal(DEFAULT_SYNTH_PARAMS.oscillatorEnabled);
   const detune = useSignal(DEFAULT_SYNTH_PARAMS.detune);
-  const currentNote = useSignal(frequencyToNote(DEFAULT_SYNTH_PARAMS.frequency)); // Derived value for display
-  
+  const currentNote = useSignal(
+    frequencyToNote(DEFAULT_SYNTH_PARAMS.frequency),
+  ); // Derived value for display
+
   // New synth parameters
   const attack = useSignal(DEFAULT_SYNTH_PARAMS.attack);
   const release = useSignal(DEFAULT_SYNTH_PARAMS.release);
@@ -78,21 +80,21 @@ export default function WebRTC() {
       if (logEl) logEl.scrollTop = logEl.scrollHeight;
     }, 0);
   };
-  
+
   // Generic parameter update utility
-  interface AudioParamUpdateOptions<T> {
+  type AudioParamUpdateOptions<T> = {
     // Required parameters
-    signal: Signal<T>;                    // Signal storing the parameter value
-    paramName: string;                    // Parameter name for logging and sending
-    newValue: T;                          // New value to set
-    
+    signal: Signal<T>; // Signal storing the parameter value
+    paramName: string; // Parameter name for logging and sending
+    newValue: T; // New value to set
+
     // Optional parameters
-    audioNode?: AudioParam | null;        // Web Audio node parameter to update (if applicable)
-    formatValue?: (value: T) => string;   // Function to format value for display
-    unit?: string;                        // Unit of measurement for logging
-    extraUpdates?: (value: T) => void;    // Additional updates to perform
-    skipSendToController?: boolean;       // Skip sending to controller
-  }
+    audioNode?: AudioParam | null; // Web Audio node parameter to update (if applicable)
+    formatValue?: (value: T) => string; // Function to format value for display
+    unit?: string; // Unit of measurement for logging
+    extraUpdates?: ((value: T) => void) | null; // Additional updates to perform
+    skipSendToController?: boolean; // Skip sending to controller
+  };
 
   // Utility for sending a parameter update to controller
   const sendParamToController = (param: string, value: any) => {
@@ -108,9 +110,9 @@ export default function WebRTC() {
       }
     }
   };
-  
+
   // Generic parameter update function
-  const updateAudioParam = <T>({
+  const updateAudioParam = <T extends unknown>({
     signal,
     paramName,
     newValue,
@@ -118,35 +120,35 @@ export default function WebRTC() {
     formatValue = String,
     unit = "",
     extraUpdates = null,
-    skipSendToController = false
+    skipSendToController = false,
   }: AudioParamUpdateOptions<T>) => {
     // Update the signal value
     signal.value = newValue;
-    
+
     // Update the audio node if provided and audioContext exists
     if (audioNode && audioContext) {
       const now = audioContext.currentTime;
       audioNode.setValueAtTime(newValue as number, now);
     }
-    
+
     // Perform any extra updates
     if (extraUpdates) {
       extraUpdates(newValue);
     }
-    
+
     // Log the change
     const formattedValue = formatValue(newValue);
     const unitString = unit ? ` ${unit}` : "";
     addLog(`${paramName} updated to ${formattedValue}${unitString}`);
-    
+
     // Send to controller if connected and not skipped
     if (!skipSendToController) {
       sendParamToController(paramName.toLowerCase(), newValue);
     }
-    
+
     return newValue;
   };
-  
+
   // Utility for sending all synth parameters to controller
   const sendAllSynthParameters = (channel: RTCDataChannel) => {
     try {
@@ -165,7 +167,7 @@ export default function WebRTC() {
         { param: "vibratoWidth", value: vibratoWidth.value },
         { param: "portamentoTime", value: portamentoTime.value },
       ];
-      
+
       // Send each parameter
       params.forEach(({ param, value }) => {
         channel.send(JSON.stringify({
@@ -174,20 +176,20 @@ export default function WebRTC() {
           value,
         }));
       });
-      
+
       // Send audio state
       channel.send(JSON.stringify({
         type: "audio_state",
         isMuted: isMuted.value,
         audioState: audioState.value,
       }));
-      
+
       addLog("Sent synth parameters and audio state to controller");
     } catch (error) {
       console.error("Error sending synth parameters:", error);
     }
   };
-  
+
   // Send only audio state to controller
   const sendAudioStateOnly = (channel: RTCDataChannel) => {
     try {
@@ -201,15 +203,19 @@ export default function WebRTC() {
       console.error("Error sending audio state:", error);
     }
   };
-  
+
   // Handle ping messages
-  const handlePingMessage = (data: string, channel: RTCDataChannel, prefix: string = "") => {
+  const handlePingMessage = (
+    data: string,
+    channel: RTCDataChannel,
+    prefix: string = "",
+  ) => {
     console.log(`[${prefix}] PING detected!`);
-    
+
     // Create pong response by replacing PING with PONG
     const pongMessage = data.replace("PING:", "PONG:");
     console.log(`[${prefix}] Sending PONG:`, pongMessage);
-    
+
     // Send the response immediately
     try {
       // Add a small delay to ensure message is processed
@@ -222,20 +228,28 @@ export default function WebRTC() {
           console.error(`[${prefix}] Failed to send delayed PONG:`, e);
         }
       }, 10);
-      
+
       // Also try sending immediately
       channel.send(pongMessage);
       console.log(`[${prefix}] PONG sent immediately`);
     } catch (error) {
       console.error(`[${prefix}] Error sending PONG:`, error);
-      addLog(`Failed to respond to ping: ${error.message}`);
+      addLog(
+        `Failed to respond to ping: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   };
-  
+
   // Handle test messages
-  const handleTestMessage = (data: string, channel: RTCDataChannel, prefix: string = "") => {
+  const handleTestMessage = (
+    data: string,
+    channel: RTCDataChannel,
+    prefix: string = "",
+  ) => {
     console.log(`[${prefix}] TEST message detected!`);
-    
+
     // Reply with the same test message
     try {
       // Echo back the test message
@@ -244,10 +258,14 @@ export default function WebRTC() {
       addLog(`Echoed test message`);
     } catch (error) {
       console.error(`[${prefix}] Error echoing test message:`, error);
-      addLog(`Failed to echo test message: ${error.message}`);
+      addLog(
+        `Failed to echo test message: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   };
-  
+
   // Unified parameter handler map
   const paramHandlers: Record<string, ParamHandler> = {
     frequency: (value, source = "controller") => {
@@ -316,25 +334,32 @@ export default function WebRTC() {
       updateFrequency(noteFreq);
       currentNote.value = value as string;
       addLog(`Note ${value} (${noteFreq}Hz) set by ${source}`);
-    }
+    },
   };
-  
+
   // Unified channel message handler
-  const handleChannelMessage = (event: MessageEvent, channel: RTCDataChannel, prefix: string = "") => {
+  const handleChannelMessage = (
+    event: MessageEvent,
+    channel: RTCDataChannel,
+    prefix: string = "",
+  ) => {
     console.log(`[${prefix || "CLIENT"}] Received message:`, event.data);
-    
+
     // Try to parse JSON messages
     if (typeof event.data === "string" && event.data.startsWith("{")) {
       try {
         const message = JSON.parse(event.data);
-        
+
         // Handle synth parameter update messages
         if (message.type === "synth_param") {
           const param = message.param;
           const value = message.value;
-          
+
           if (paramHandlers[param]) {
-            paramHandlers[param](value, prefix ? `${prefix} controller` : "controller");
+            paramHandlers[param](
+              value,
+              prefix ? `${prefix} controller` : "controller",
+            );
           } else {
             console.warn(`Unknown synth parameter: ${param}`);
             addLog(`Unknown synth parameter: ${param}`);
@@ -346,29 +371,29 @@ export default function WebRTC() {
         // Continue with non-JSON message handling
       }
     }
-    
+
     // Handle PING messages
     if (typeof event.data === "string" && event.data.startsWith("PING:")) {
       handlePingMessage(event.data, channel, prefix);
       return;
     }
-    
+
     // Handle TEST messages
     if (typeof event.data === "string" && event.data.startsWith("TEST:")) {
       handleTestMessage(event.data, channel, prefix);
       return;
     }
-    
+
     // Regular message
     addLog(`Received: ${event.data}`);
   };
-  
+
   // Setup channel event handlers
   const setupDataChannel = (channel: RTCDataChannel, prefix: string = "") => {
     channel.onopen = () => {
       addLog(`Data channel opened${prefix ? ` (${prefix})` : ""}`);
       connected.value = true;
-      
+
       // Send current synth parameters to the controller
       if (!isMuted.value) { // Not muted means audio is enabled
         sendAllSynthParameters(channel);
@@ -377,18 +402,18 @@ export default function WebRTC() {
         sendAudioStateOnly(channel);
       }
     };
-    
+
     channel.onclose = () => {
       addLog(`Data channel closed${prefix ? ` (${prefix})` : ""}`);
-      
+
       // Disconnection not initiated by user, try to reconnect
       disconnect(false);
     };
-    
+
     channel.onmessage = (event) => {
       handleChannelMessage(event, channel, prefix);
     };
-    
+
     return channel;
   };
 
@@ -436,7 +461,7 @@ export default function WebRTC() {
     // Create data channel
     const channel = peerConnection.createDataChannel("dataChannel");
     dataChannel.value = channel;
-    
+
     // Setup the data channel with our unified handlers
     setupDataChannel(channel, "CLIENT");
 
@@ -444,7 +469,7 @@ export default function WebRTC() {
     peerConnection.ondatachannel = (event) => {
       const receivedChannel = event.channel;
       dataChannel.value = receivedChannel;
-      
+
       // Setup the received channel with our unified handlers
       setupDataChannel(receivedChannel, "RECEIVED");
     };
@@ -493,7 +518,11 @@ export default function WebRTC() {
       })
       .catch((error) => {
         console.error("Error creating/sending offer:", error);
-        addLog(`Error creating offer: ${error}`);
+        addLog(
+          `Error creating offer: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       });
   };
 
@@ -605,13 +634,13 @@ export default function WebRTC() {
     console.log(`Auto-connecting to controller: ${controllerId}`);
     addLog(`Auto-connecting to controller: ${controllerId}`);
     activeController.value = controllerId;
-    
+
     // Set target ID and connect
     targetId.value = controllerId;
-    
+
     // Set flag before calling connect to prevent multiple attempts
     autoConnectAttempted.value = true;
-    
+
     // Call connect with a small delay to ensure everything is ready
     setTimeout(() => {
       console.log("Executing delayed connection to", controllerId);
@@ -675,16 +704,19 @@ export default function WebRTC() {
 
               // Auto-connect if we have audio enabled and haven't attempted connection yet
               console.log("Received controller info, should connect:", {
-                isMuted: isMuted.value, 
+                isMuted: isMuted.value,
                 connected: connected.value,
                 autoConnectAttempted: autoConnectAttempted.value,
                 audioState: audioState.value,
-                showAudioButton: showAudioButton.value
+                showAudioButton: showAudioButton.value,
               });
-              
+
               // Always attempt connection regardless of audio state
               if (!connected.value && !autoConnectAttempted.value) {
-                console.log("ATTEMPTING AUTO-CONNECTION to controller:", message.controllerId);
+                console.log(
+                  "ATTEMPTING AUTO-CONNECTION to controller:",
+                  message.controllerId,
+                );
                 connectToController(message.controllerId);
               }
             } else {
@@ -698,7 +730,11 @@ export default function WebRTC() {
             console.log("Received WebRTC offer from:", message.source);
             handleOffer(message).catch((error) => {
               console.error("Error handling offer:", error);
-              addLog(`Error handling offer: ${error.message}`);
+              addLog(
+                `Error handling offer: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
             });
             break;
 
@@ -716,7 +752,11 @@ export default function WebRTC() {
             addLog(`Unknown message type: ${message.type}`);
         }
       } catch (error) {
-        addLog(`Error handling message: ${error}`);
+        addLog(
+          `Error handling message: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     };
   };
@@ -724,7 +764,7 @@ export default function WebRTC() {
   // Handle an incoming offer
   const handleOffer = async (message: any) => {
     console.log("Handling WebRTC offer from:", message.source, message);
-    
+
     if (!connection.value) {
       // Get ICE servers from Twilio
       const iceServers = await fetchIceServers();
@@ -737,7 +777,10 @@ export default function WebRTC() {
       console.log("New RTCPeerConnection created for incoming offer");
 
       peerConnection.onicecandidate = (event) => {
-        console.log("ICE candidate generated (offer handler):", event.candidate);
+        console.log(
+          "ICE candidate generated (offer handler):",
+          event.candidate,
+        );
         if (event.candidate && socket.value) {
           console.log("Sending ICE candidate to", message.source);
           const iceMessage = {
@@ -755,10 +798,13 @@ export default function WebRTC() {
       };
 
       peerConnection.ondatachannel = (event) => {
-        console.log("Data channel received in offer handler:", event.channel.label);
+        console.log(
+          "Data channel received in offer handler:",
+          event.channel.label,
+        );
         const receivedChannel = event.channel;
         dataChannel.value = receivedChannel;
-        
+
         // Setup the received channel with our unified handlers
         setupDataChannel(receivedChannel, "ALT");
       };
@@ -785,7 +831,7 @@ export default function WebRTC() {
             };
             socket.value.send(JSON.stringify(answerMessage));
             console.log("Answer sent:", answerMessage);
-            
+
             // Store the target ID for future communication
             targetId.value = message.source;
             addLog("Sent answer");
@@ -795,7 +841,11 @@ export default function WebRTC() {
         })
         .catch((error) => {
           console.error("Error creating/sending answer:", error);
-          addLog(`Error creating answer: ${error}`);
+          addLog(
+            `Error creating answer: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         });
     }
   };
@@ -803,7 +853,7 @@ export default function WebRTC() {
   // Handle an incoming answer
   const handleAnswer = (message: any) => {
     console.log("Handling WebRTC answer from:", message.source, message);
-    
+
     if (connection.value) {
       console.log("Setting remote description from answer");
       connection.value.setRemoteDescription(
@@ -815,7 +865,11 @@ export default function WebRTC() {
         })
         .catch((error) => {
           console.error("Error setting remote description:", error);
-          addLog(`Error setting remote description: ${error}`);
+          addLog(
+            `Error setting remote description: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         });
     } else {
       console.error("Cannot handle answer: No connection exists");
@@ -826,7 +880,7 @@ export default function WebRTC() {
   // Handle an incoming ICE candidate
   const handleIceCandidate = (message: any) => {
     console.log("Handling ICE candidate from:", message.source, message);
-    
+
     if (connection.value) {
       console.log("Adding ICE candidate to connection");
       connection.value.addIceCandidate(new RTCIceCandidate(message.data))
@@ -836,7 +890,11 @@ export default function WebRTC() {
         })
         .catch((error) => {
           console.error("Error adding ICE candidate:", error);
-          addLog(`Error adding ICE candidate: ${error}`);
+          addLog(
+            `Error adding ICE candidate: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         });
     } else {
       console.error("Cannot handle ICE candidate: No connection exists");
@@ -849,7 +907,7 @@ export default function WebRTC() {
     if (!dataChannel.value || dataChannel.value.readyState !== "open") {
       return;
     }
-    
+
     if (isMuted.value) {
       sendAudioStateOnly(dataChannel.value);
     } else {
@@ -881,52 +939,57 @@ export default function WebRTC() {
 
         // Create audio processing chain:
         // Oscillator -> Vibrato -> Filter -> GainNode (volume) -> Destination
-        
+
         // Create filter node (always in chain)
         filterNode = audioContext.createBiquadFilter();
         filterNode.type = "lowpass";
         filterNode.frequency.value = filterCutoff.value;
         filterNode.Q.value = filterResonance.value;
-        
+
         // Create gain node for volume control (always in chain)
         gainNode = audioContext.createGain();
         gainNode.gain.value = volume.value;
-        
+
         // Connect filter to gain, and gain to destination
         filterNode.connect(gainNode);
         gainNode.connect(audioContext.destination);
-        
+
         // Always create vibrato components - we'll set gain to 0 if not active
         // Create vibrato oscillator (LFO)
         vibratoOsc = audioContext.createOscillator();
         vibratoOsc.type = "sine"; // Sine wave is best for vibrato
         vibratoOsc.frequency.value = vibratoRate.value;
-        
+
         // Create vibrato gain to control depth
         vibratoGain = audioContext.createGain();
-        
+
         // Only make vibrato audible if both rate and width are non-zero
         if (vibratoRate.value > 0 && vibratoWidth.value > 0) {
           // Calculate proper vibrato amplitude based on the frequency
-          const semitoneRatio = Math.pow(2, 1/12); // Semitone ratio
+          const semitoneRatio = Math.pow(2, 1 / 12); // Semitone ratio
           const semitoneAmount = vibratoWidth.value / 100; // Convert cents to semitone fraction
           // We'll need to set the actual amount when the oscillator exists
           // For now, use a safe estimate based on A4 frequency
           const baseFreq = 440;
-          const vibratoAmount = baseFreq * (Math.pow(semitoneRatio, semitoneAmount/2) - 1);
+          const vibratoAmount = baseFreq *
+            (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
           vibratoGain.gain.value = vibratoAmount;
-          
-          console.log(`Vibrato prepared with rate: ${vibratoRate.value}Hz and width: ${vibratoWidth.value}¢ (est. amount: ${vibratoAmount}Hz)`);
-          addLog(`Vibrato prepared at ${vibratoRate.value}Hz with width ${vibratoWidth.value}¢`);
+
+          console.log(
+            `Vibrato prepared with rate: ${vibratoRate.value}Hz and width: ${vibratoWidth.value}¢ (est. amount: ${vibratoAmount}Hz)`,
+          );
+          addLog(
+            `Vibrato prepared at ${vibratoRate.value}Hz with width ${vibratoWidth.value}¢`,
+          );
         } else {
           // Zero gain means no vibrato effect
           vibratoGain.gain.value = 0;
           console.log("Vibrato prepared but disabled (zero rate or width)");
         }
-        
+
         // Connect vibrato components - we'll connect to oscillator later
         vibratoOsc.connect(vibratoGain);
-        
+
         // Start the vibrato oscillator
         vibratoOsc.start();
 
@@ -936,34 +999,39 @@ export default function WebRTC() {
           oscillator.type = waveform.value;
           oscillator.frequency.value = frequency.value;
           oscillator.detune.value = detune.value;
-          
+
           // Always connect vibrato LFO to oscillator frequency parameter
           // (gain is set to 0 if vibrato should be inactive)
           if (vibratoGain) {
             vibratoGain.connect(oscillator.frequency);
-            
+
             // Update the vibrato amount based on the new oscillator's frequency
             if (vibratoWidth.value > 0) {
-              const semitoneRatio = Math.pow(2, 1/12);
+              const semitoneRatio = Math.pow(2, 1 / 12);
               const semitoneAmount = vibratoWidth.value / 100;
               const currentFreq = oscillator.frequency.value;
-              const vibratoAmount = currentFreq * (Math.pow(semitoneRatio, semitoneAmount/2) - 1);
-              
+              const vibratoAmount = currentFreq *
+                (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
+
               vibratoGain.gain.value = vibratoAmount;
-              console.log(`Vibrato amount adjusted to ${vibratoAmount}Hz based on oscillator frequency ${currentFreq}Hz`);
+              console.log(
+                `Vibrato amount adjusted to ${vibratoAmount}Hz based on oscillator frequency ${currentFreq}Hz`,
+              );
             }
           }
-          
+
           // Connect oscillator to filter
           oscillator.connect(filterNode);
-          
+
           // Start the oscillator
           oscillator.start();
 
           addLog(
             `Oscillator started with note ${currentNote.value} (${frequency.value}Hz) ` +
-            `using ${waveform.value} waveform, detune: ${detune.value}¢, ` +
-            `filter: ${Math.round(filterCutoff.value)}Hz (Q:${filterResonance.value.toFixed(1)})`
+              `using ${waveform.value} waveform, detune: ${detune.value}¢, ` +
+              `filter: ${Math.round(filterCutoff.value)}Hz (Q:${
+                filterResonance.value.toFixed(1)
+              })`,
           );
         } else {
           addLog("Oscillator is disabled");
@@ -971,24 +1039,34 @@ export default function WebRTC() {
       }
 
       // Resume the audio context (needed for browsers that suspend by default)
-      if (audioContext.state !== "running") {
+      if (audioContext && audioContext.state !== "running") {
         audioContext.resume().then(() => {
-          addLog(`Audio context resumed, state: ${audioContext.state}`);
-          audioState.value = audioContext.state;
+          if (audioContext) {
+            addLog(`Audio context resumed, state: ${audioContext.state}`);
+            audioState.value = audioContext.state;
+          }
           sendAudioState(); // Send updated state to controller
         }).catch((err) => {
-          addLog(`Error resuming audio context: ${err.message}`);
+          addLog(
+            `Error resuming audio context: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
         });
-      } else {
+      } else if (audioContext) {
         audioState.value = audioContext.state;
       }
 
       // Setup audio state change listener
-      audioContext.onstatechange = () => {
-        audioState.value = audioContext.state;
-        addLog(`Audio context state changed to: ${audioContext.state}`);
-        sendAudioState(); // Send updated state to controller
-      };
+      if (audioContext) {
+        audioContext.onstatechange = () => {
+          if (audioContext) {
+            audioState.value = audioContext.state;
+            addLog(`Audio context state changed to: ${audioContext.state}`);
+            sendAudioState(); // Send updated state to controller
+          }
+        };
+      }
 
       // Mark audio as enabled and hide the button
       isMuted.value = false; // Not muted = audio enabled
@@ -1003,7 +1081,11 @@ export default function WebRTC() {
         requestActiveController();
       }
     } catch (error) {
-      addLog(`Error initializing audio context: ${error.message}`);
+      addLog(
+        `Error initializing audio context: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
       console.error("Audio context initialization failed:", error);
     }
   };
@@ -1012,38 +1094,40 @@ export default function WebRTC() {
   const updateFrequency = (newFrequency: number) => {
     // Always update the stored value
     frequency.value = newFrequency;
-    
+
     // Update UI note display as well
     currentNote.value = frequencyToNote(newFrequency);
-    
+
     if (oscillator && audioContext) {
       const now = audioContext.currentTime;
       const currentFreq = oscillator.frequency.value;
-      
+
       // Apply portamento if enabled
       if (portamentoTime.value > 0) {
         // Proper sequence for smooth automation:
         // 1. Cancel any scheduled automation first
         oscillator.frequency.cancelScheduledValues(now);
-        
+
         // 2. Set current value at current time
         oscillator.frequency.setValueAtTime(currentFreq, now);
-        
+
         // 3. Use exponential ramp for perceptually smooth pitch transition
         // Note: exponentialRamp can't go to zero, but that's not an issue for frequencies
         oscillator.frequency.exponentialRampToValueAtTime(
           newFrequency,
-          now + portamentoTime.value
+          now + portamentoTime.value,
         );
-        
-        addLog(`Frequency gliding to ${newFrequency}Hz (${currentNote.value}) over ${portamentoTime.value}s`);
+
+        addLog(
+          `Frequency gliding to ${newFrequency}Hz (${currentNote.value}) over ${portamentoTime.value}s`,
+        );
       } else {
         // Instant frequency change
         // Still need to cancel any existing automation first
         oscillator.frequency.cancelScheduledValues(now);
         oscillator.frequency.setValueAtTime(
           newFrequency,
-          now
+          now,
         );
         addLog(`Frequency changed to ${newFrequency}Hz (${currentNote.value})`);
       }
@@ -1060,17 +1144,20 @@ export default function WebRTC() {
           console.error("Error sending frequency update:", error);
         }
       }
-      
+
       // Update vibrato amount when frequency changes (if vibrato is active)
       if (vibratoGain && vibratoOsc && vibratoWidth.value > 0 && audioContext) {
         const now = audioContext.currentTime;
-        const semitoneRatio = Math.pow(2, 1/12);
+        const semitoneRatio = Math.pow(2, 1 / 12);
         const semitoneAmount = vibratoWidth.value / 100;
         // Calculate new vibrato amount based on new frequency
-        const vibratoAmount = newFrequency * (Math.pow(semitoneRatio, semitoneAmount/2) - 1);
-        
+        const vibratoAmount = newFrequency *
+          (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
+
         vibratoGain.gain.setValueAtTime(vibratoAmount, now);
-        console.log(`Vibrato amount adjusted to ${vibratoAmount}Hz for new frequency ${newFrequency}Hz`);
+        console.log(
+          `Vibrato amount adjusted to ${vibratoAmount}Hz for new frequency ${newFrequency}Hz`,
+        );
       }
     }
   };
@@ -1080,12 +1167,12 @@ export default function WebRTC() {
     if (oscillator) {
       // Need to update oscillator type directly since it's not an AudioParam
       oscillator.type = newWaveform;
-      
+
       // Use the generic update function for the rest
       updateAudioParam({
         signal: waveform,
         paramName: "Waveform",
-        newValue: newWaveform
+        newValue: newWaveform,
       });
     }
   };
@@ -1098,7 +1185,7 @@ export default function WebRTC() {
         paramName: "Volume",
         newValue: newVolume,
         audioNode: gainNode.gain,
-        formatValue: (val) => `${Math.round(val * 100)}%`
+        formatValue: (val) => `${Math.round(val * 100)}%`,
       });
     }
   };
@@ -1109,13 +1196,13 @@ export default function WebRTC() {
   const updateNoteByName = (note: string) => {
     // Get the frequency for this note from our mapping
     const newFrequency = noteToFrequency(note);
-    
+
     // Update the UI note display
     currentNote.value = note;
-    
+
     // Update the actual frequency (physics-based parameter)
     updateFrequency(newFrequency);
-    
+
     addLog(`Note changed to ${note} (${newFrequency}Hz)`);
   };
 
@@ -1128,7 +1215,7 @@ export default function WebRTC() {
         newValue: cents,
         audioNode: oscillator?.detune || null,
         unit: "cents",
-        formatValue: (val) => val > 0 ? `+${val}` : String(val)
+        formatValue: (val) => val > 0 ? `+${val}` : String(val),
       });
     } else {
       // Just update the signal if no oscillator exists
@@ -1137,11 +1224,11 @@ export default function WebRTC() {
         paramName: "Detune",
         newValue: cents,
         unit: "cents",
-        formatValue: (val) => val > 0 ? `+${val}` : String(val)
+        formatValue: (val) => val > 0 ? `+${val}` : String(val),
       });
     }
   };
-  
+
   // Update attack time
   const updateAttack = (attackTime: number) => {
     // No audioNode for attack as it's applied when oscillator is restarted
@@ -1150,10 +1237,11 @@ export default function WebRTC() {
       paramName: "Attack",
       newValue: attackTime,
       unit: "s",
-      formatValue: (val) => val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`
+      formatValue: (val) =>
+        val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
     });
   };
-  
+
   // Update release time
   const updateRelease = (releaseTime: number) => {
     // No audioNode for release as it's applied when oscillator is released
@@ -1162,10 +1250,11 @@ export default function WebRTC() {
       paramName: "Release",
       newValue: releaseTime,
       unit: "s",
-      formatValue: (val) => val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`
+      formatValue: (val) =>
+        val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
     });
   };
-  
+
   // Update filter cutoff
   const updateFilterCutoff = (cutoffFreq: number) => {
     if (filterNode) {
@@ -1175,7 +1264,8 @@ export default function WebRTC() {
         newValue: cutoffFreq,
         audioNode: filterNode.frequency,
         unit: "Hz",
-        formatValue: (val) => val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`
+        formatValue: (val) =>
+          val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`,
       });
     } else {
       // Just update the signal if no filter exists
@@ -1184,11 +1274,12 @@ export default function WebRTC() {
         paramName: "Filter cutoff",
         newValue: cutoffFreq,
         unit: "Hz",
-        formatValue: (val) => val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`
+        formatValue: (val) =>
+          val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`,
       });
     }
   };
-  
+
   // Update filter resonance
   const updateFilterResonance = (resonance: number) => {
     if (filterNode) {
@@ -1197,7 +1288,7 @@ export default function WebRTC() {
         paramName: "Filter resonance",
         newValue: resonance,
         audioNode: filterNode.Q,
-        formatValue: (val) => val.toFixed(1)
+        formatValue: (val) => val.toFixed(1),
       });
     } else {
       // Just update the signal if no filter exists
@@ -1205,47 +1296,50 @@ export default function WebRTC() {
         signal: filterResonance,
         paramName: "Filter resonance",
         newValue: resonance,
-        formatValue: (val) => val.toFixed(1)
+        formatValue: (val) => val.toFixed(1),
       });
     }
   };
-  
+
   // Update vibrato rate
   const updateVibratoRate = (rate: number) => {
     // Special processing is needed for vibrato rate
     const vibratoRateUpdates = (rate: number) => {
       if (!vibratoOsc || !audioContext) return;
-      
+
       const now = audioContext.currentTime;
-      
+
       // If rate is 0, effectively disable vibrato by setting the LFO to 0Hz
       if (rate === 0) {
         // Set to very low value (0.001Hz = one cycle per ~17 minutes)
         vibratoOsc.frequency.setValueAtTime(0.001, now);
-        
+
         // Also, if we have vibratoGain, set it to 0
         if (vibratoGain) {
           vibratoGain.gain.setValueAtTime(0, now);
         }
-        
+
         console.log("Vibrato disabled (rate set to 0)");
       } else {
         // Normal rate update
         vibratoOsc.frequency.setValueAtTime(rate, now);
-        
+
         // If vibrato was disabled before and we have width > 0, re-enable it
         if (vibratoGain && vibratoWidth.value > 0 && oscillator) {
-          const semitoneRatio = Math.pow(2, 1/12);
+          const semitoneRatio = Math.pow(2, 1 / 12);
           const semitoneAmount = vibratoWidth.value / 100;
           const currentFreq = oscillator.frequency.value;
-          const vibratoAmount = currentFreq * (Math.pow(semitoneRatio, semitoneAmount/2) - 1);
-          
+          const vibratoAmount = currentFreq *
+            (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
+
           vibratoGain.gain.setValueAtTime(vibratoAmount, now);
-          console.log(`Vibrato re-enabled with rate ${rate}Hz and amount ${vibratoAmount}Hz`);
+          console.log(
+            `Vibrato re-enabled with rate ${rate}Hz and amount ${vibratoAmount}Hz`,
+          );
         }
       }
     };
-    
+
     // Use the generic update function with custom processing
     updateAudioParam({
       signal: vibratoRate,
@@ -1253,31 +1347,34 @@ export default function WebRTC() {
       newValue: rate,
       unit: "Hz",
       extraUpdates: vibratoRateUpdates,
-      formatValue: (val) => val === 0 ? "off" : val.toFixed(1)
+      formatValue: (val) => val === 0 ? "off" : val.toFixed(1),
     });
   };
-  
+
   // Update vibrato width
   const updateVibratoWidth = (width: number) => {
     // Special processing is needed for vibrato width
     const vibratoWidthUpdates = (width: number) => {
       if (!vibratoGain || !audioContext || !oscillator) return;
-      
+
       // Calculate vibrato amount based on semitone ratio and current frequency
-      const semitoneRatio = Math.pow(2, 1/12);
+      const semitoneRatio = Math.pow(2, 1 / 12);
       const semitoneAmount = width / 100;
       const currentFreq = oscillator.frequency.value;
-      const vibratoAmount = currentFreq * (Math.pow(semitoneRatio, semitoneAmount/2) - 1);
-      
+      const vibratoAmount = currentFreq *
+        (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
+
       vibratoGain.gain.setValueAtTime(vibratoAmount, audioContext.currentTime);
-      console.log(`Vibrato width set to ${width} cents (amount: ${vibratoAmount}Hz around ${currentFreq}Hz)`);
-      
+      console.log(
+        `Vibrato width set to ${width} cents (amount: ${vibratoAmount}Hz around ${currentFreq}Hz)`,
+      );
+
       // When width is 0, disable vibrato completely by setting gain to 0
       if (width === 0 && vibratoOsc) {
         vibratoGain.gain.setValueAtTime(0, audioContext.currentTime);
       }
     };
-    
+
     // Use the generic update function with custom processing
     updateAudioParam({
       signal: vibratoWidth,
@@ -1285,10 +1382,10 @@ export default function WebRTC() {
       newValue: width,
       unit: "cents",
       extraUpdates: vibratoWidthUpdates,
-      formatValue: (val) => val === 0 ? "off" : val.toString()
+      formatValue: (val) => val === 0 ? "off" : val.toString(),
     });
   };
-  
+
   // Update portamento time
   const updatePortamentoTime = (time: number) => {
     // Use the generic update function
@@ -1297,7 +1394,7 @@ export default function WebRTC() {
       paramName: "Portamento time",
       newValue: time,
       unit: "s",
-      formatValue: (val) => val === 0 ? "off" : val.toFixed(2)
+      formatValue: (val) => val === 0 ? "off" : val.toFixed(2),
     });
   };
 
@@ -1329,28 +1426,28 @@ export default function WebRTC() {
           filterNode.frequency.value = filterCutoff.value;
           filterNode.Q.value = filterResonance.value;
         }
-        
+
         if (!gainNode) {
           console.log("[SYNTH] Creating missing gain node");
           gainNode = audioContext.createGain();
           gainNode.gain.value = volume.value;
-          
+
           // Connect filter to gain and gain to destination
           filterNode.connect(gainNode);
           gainNode.connect(audioContext.destination);
         }
-        
+
         // Create vibrato if it doesn't exist and parameters are non-zero
         if (!vibratoOsc && vibratoRate.value > 0 && vibratoWidth.value > 0) {
           console.log("[SYNTH] Creating vibrato LFO");
           vibratoOsc = audioContext.createOscillator();
           vibratoOsc.type = "sine";
           vibratoOsc.frequency.value = vibratoRate.value;
-          
+
           vibratoGain = audioContext.createGain();
           const vibratoAmount = vibratoWidth.value / 100 * 0.5;
           vibratoGain.gain.value = vibratoAmount;
-          
+
           // Connect vibrato oscillator to gain
           vibratoOsc.connect(vibratoGain);
           vibratoOsc.start();
@@ -1361,7 +1458,7 @@ export default function WebRTC() {
         oscillator.type = waveform.value;
         oscillator.frequency.value = frequency.value;
         oscillator.detune.value = detune.value;
-        
+
         // Connect vibrato to frequency if it exists
         if (vibratoOsc && vibratoGain) {
           vibratoGain.connect(oscillator.frequency);
@@ -1370,14 +1467,16 @@ export default function WebRTC() {
         // Connect oscillator to filter (which is connected to the gain node)
         console.log("[SYNTH] Connecting oscillator to audio chain");
         oscillator.connect(filterNode);
-        
+
         // Start the oscillator
         console.log("[SYNTH] Starting oscillator");
         oscillator.start();
-        
+
         addLog(
           `Oscillator turned on: ${waveform.value} @ ${frequency.value}Hz ` +
-          `(detune: ${detune.value}¢, filter: ${Math.round(filterCutoff.value)}Hz, Q: ${filterResonance.value.toFixed(1)})`
+            `(detune: ${detune.value}¢, filter: ${
+              Math.round(filterCutoff.value)
+            }Hz, Q: ${filterResonance.value.toFixed(1)})`,
         );
       } else {
         console.log(
@@ -1392,14 +1491,16 @@ export default function WebRTC() {
         oscillator.disconnect();
         oscillator = null;
         addLog("Oscillator turned off");
-        
+
         // Don't stop vibrato, just disconnect it from the oscillator
         // This way it's preserved for when the oscillator is turned back on
         if (vibratoGain) {
           try {
             // Just disconnect the gain node (removing connections to oscillator.frequency)
             vibratoGain.disconnect();
-            console.log("[SYNTH] Disconnected vibrato from oscillator frequency");
+            console.log(
+              "[SYNTH] Disconnected vibrato from oscillator frequency",
+            );
           } catch (error) {
             console.error("[SYNTH] Error disconnecting vibrato:", error);
           }
@@ -1461,7 +1562,7 @@ export default function WebRTC() {
           console.error("Error stopping oscillator:", err);
         }
       }
-      
+
       if (vibratoOsc) {
         try {
           vibratoOsc.stop();
@@ -1471,7 +1572,7 @@ export default function WebRTC() {
           console.error("Error stopping vibrato oscillator:", err);
         }
       }
-      
+
       if (vibratoGain) {
         try {
           vibratoGain.disconnect();
@@ -1480,7 +1581,7 @@ export default function WebRTC() {
           console.error("Error disconnecting vibrato gain:", err);
         }
       }
-      
+
       if (filterNode) {
         try {
           filterNode.disconnect();
@@ -1525,27 +1626,32 @@ export default function WebRTC() {
           <div class="audio-enable">
             <h1>WebRTC Synth</h1>
             <div class="controller-connection-info">
-              {activeController.value && !connected.value ? (
-                <div class="controller-available">
-                  <p>Controller available: {activeController.value}</p>
-                  <button
-                    class="connect-button"
-                    onClick={() => connectToController(activeController.value as string)}
-                  >
-                    Connect to Controller
-                  </button>
-                </div>
-              ) : connected.value ? (
-                <p class="connection-status status-connected">
-                  Connected to controller
-                </p>
-              ) : (
-                <p class="connection-status">
-                  Searching for controller...
-                </p>
-              )}
+              {activeController.value && !connected.value
+                ? (
+                  <div class="controller-available">
+                    <p>Controller available: {activeController.value}</p>
+                    <button
+                      class="connect-button"
+                      onClick={() =>
+                        connectToController(activeController.value as string)}
+                    >
+                      Connect to Controller
+                    </button>
+                  </div>
+                )
+                : connected.value
+                ? (
+                  <p class="connection-status status-connected">
+                    Connected to controller
+                  </p>
+                )
+                : (
+                  <p class="connection-status">
+                    Searching for controller...
+                  </p>
+                )}
             </div>
-            
+
             <p>Click below to enable audio (you can connect without audio).</p>
             <button
               onClick={initAudioContext}
@@ -1625,38 +1731,40 @@ export default function WebRTC() {
                   <p>
                     Attack:{" "}
                     <span class="param-value">
-                      {attack.value < 0.01 
-                        ? `${Math.round(attack.value * 1000)}ms` 
+                      {attack.value < 0.01
+                        ? `${Math.round(attack.value * 1000)}ms`
                         : `${attack.value.toFixed(2)}s`}
                     </span>
                   </p>
                   <p>
                     Release:{" "}
                     <span class="param-value">
-                      {release.value < 0.01 
-                        ? `${Math.round(release.value * 1000)}ms` 
+                      {release.value < 0.01
+                        ? `${Math.round(release.value * 1000)}ms`
                         : `${release.value.toFixed(2)}s`}
                     </span>
                   </p>
                   <p>
                     Filter:{" "}
                     <span class="param-value">
-                      {filterCutoff.value < 1000 
-                        ? `${Math.round(filterCutoff.value)}Hz` 
-                        : `${(filterCutoff.value / 1000).toFixed(1)}kHz`} (Q:{filterResonance.value.toFixed(1)})
+                      {filterCutoff.value < 1000
+                        ? `${Math.round(filterCutoff.value)}Hz`
+                        : `${(filterCutoff.value / 1000).toFixed(1)}kHz`}{" "}
+                      (Q:{filterResonance.value.toFixed(1)})
                     </span>
                   </p>
                   <p>
                     Vibrato:{" "}
                     <span class="param-value">
-                      {vibratoRate.value.toFixed(1)}Hz, {Math.round(vibratoWidth.value)}¢
+                      {vibratoRate.value.toFixed(1)}Hz,{" "}
+                      {Math.round(vibratoWidth.value)}¢
                     </span>
                   </p>
                   <p>
                     Portamento:{" "}
                     <span class="param-value">
-                      {portamentoTime.value === 0 
-                        ? "Off" 
+                      {portamentoTime.value === 0
+                        ? "Off"
                         : `${portamentoTime.value.toFixed(2)}s`}
                     </span>
                   </p>
