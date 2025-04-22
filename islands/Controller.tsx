@@ -1,5 +1,6 @@
 import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
+import { requestWakeLock, setupWakeLockListeners } from "../lib/utils/wakeLock.ts";
 import type { SynthClient } from "../lib/types/client.ts";
 import {
   DEFAULT_SYNTH_PARAMS,
@@ -2133,10 +2134,24 @@ export default function Controller({ user }: ControllerProps) {
     addLog("Controller deactivated");
   };
 
+  // Wake lock sentinel reference
+  const wakeLock = useSignal<any>(null);
+
   // Initialize on component mount and clean up on unmount
   useEffect(() => {
     // Automatically initialize the controller
     initializeController();
+    
+    // Request wake lock to prevent screen from sleeping
+    requestWakeLock().then(lock => {
+      wakeLock.value = lock;
+    });
+    
+    // Setup wake lock event listeners for reacquisition
+    const cleanup = setupWakeLockListeners(
+      () => wakeLock.value,
+      (lock) => wakeLock.value = lock
+    );
 
     // Return cleanup function
     return () => {
@@ -2145,6 +2160,14 @@ export default function Controller({ user }: ControllerProps) {
       if (heartbeatInterval.value !== null) {
         clearInterval(heartbeatInterval.value);
       }
+      
+      // Release wake lock
+      if (wakeLock.value) {
+        wakeLock.value.release().catch(err => console.error("Error releasing wake lock", err));
+      }
+      
+      // Remove wake lock event listeners
+      if (cleanup) cleanup();
     };
   }, []);
 

@@ -1,5 +1,6 @@
 import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
+import { requestWakeLock, setupWakeLockListeners } from "../lib/utils/wakeLock.ts";
 import {
   DEFAULT_SYNTH_PARAMS,
   frequencyToNote,
@@ -1839,10 +1840,24 @@ export default function WebRTC() {
     }
   };
 
+  // Wake lock sentinel reference
+  const wakeLock = useSignal<any>(null);
+
   // Connect to the signaling server on mount and clean up on unmount
   useEffect(() => {
     // Connect to signaling server (but don't enable audio yet)
     connectWebSocket();
+    
+    // Request wake lock to prevent screen from sleeping
+    requestWakeLock().then(lock => {
+      wakeLock.value = lock;
+    });
+    
+    // Setup wake lock event listeners for reacquisition
+    const cleanup = setupWakeLockListeners(
+      () => wakeLock.value,
+      (lock) => wakeLock.value = lock
+    );
 
     // Set up periodic connection checks for auto-reconnection
     const reconnectionInterval = setInterval(() => {
@@ -1862,6 +1877,14 @@ export default function WebRTC() {
       // Clear intervals
       clearInterval(reconnectionInterval);
       clearInterval(controllerRefreshInterval);
+      
+      // Release wake lock
+      if (wakeLock.value) {
+        wakeLock.value.release().catch(err => console.error("Error releasing wake lock", err));
+      }
+      
+      // Remove wake lock event listeners
+      if (cleanup) cleanup();
 
       // Close connections
       if (socket.value) socket.value.close();
