@@ -27,7 +27,8 @@ export const attackParam = createNumberParam({
   min: MIN_ATTACK,
   max: MAX_ATTACK,
   defaultValue: MIN_ATTACK,
-  format: (val) => val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`
+  format: (val) =>
+    val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
 });
 
 /** Release time parameter descriptor */
@@ -36,5 +37,6 @@ export const releaseParam = createNumberParam({
   min: MIN_RELEASE,
   max: MAX_RELEASE,
   defaultValue: 0.1, // Short but audible release by default
-  format: (val) => val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`
+  format: (val) =>
+    val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
 });

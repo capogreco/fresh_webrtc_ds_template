@@ -27,7 +27,8 @@ export const filterCutoffParam = createNumberParam({
   min: MIN_FILTER_CUTOFF,
   max: MAX_FILTER_CUTOFF,
   defaultValue: MAX_FILTER_CUTOFF * 0.8, // 80% of max for a slightly mellower tone
-  format: (val) => val < 1000 ? `${Math.round(val)}Hz` : `${(val / 1000).toFixed(1)}kHz`
+  format: (val) =>
+    val < 1000 ? `${Math.round(val)}Hz` : `${(val / 1000).toFixed(1)}kHz`,
 });
 
 /** Filter resonance parameter descriptor */
@@ -36,5 +37,5 @@ export const filterResonanceParam = createNumberParam({
   min: MIN_FILTER_RESONANCE,
   max: MAX_FILTER_RESONANCE,
   defaultValue: MIN_FILTER_RESONANCE,
-  format: (val) => val.toFixed(1)
+  format: (val) => val.toFixed(1),
 });

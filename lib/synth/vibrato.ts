@@ -27,7 +27,7 @@ export const vibratoRateParam = createNumberParam({
   min: MIN_VIBRATO_RATE,
   max: MAX_VIBRATO_RATE,
   defaultValue: MIN_VIBRATO_RATE,
-  format: (val) => val === 0 ? "Off" : `${val.toFixed(1)}Hz`
+  format: (val) => val === 0 ? "Off" : `${val.toFixed(1)}Hz`,
 });
 
 /** Vibrato width parameter descriptor */
@@ -36,5 +36,5 @@ export const vibratoWidthParam = createNumberParam({
   min: MIN_VIBRATO_WIDTH,
   max: MAX_VIBRATO_WIDTH,
   defaultValue: MIN_VIBRATO_WIDTH,
-  format: (val) => val === 0 ? "Off" : `${val}¢`
+  format: (val) => val === 0 ? "Off" : `${val}¢`,
 });

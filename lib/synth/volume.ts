@@ -21,5 +21,5 @@ export const volumeParam = createNumberParam({
   min: MIN_VOLUME,
   max: MAX_VOLUME,
   defaultValue: 0.1, // 10% volume by default to avoid being too loud
-  format: (val) => `${Math.round(val * 100)}%`
+  format: (val) => `${Math.round(val * 100)}%`,
 });

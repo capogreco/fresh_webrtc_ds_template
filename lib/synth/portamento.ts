@@ -24,5 +24,5 @@ export const portamentoTimeParam = createNumberParam({
   format: (val) => {
     if (val === 0) return "Off";
     return val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`;
-  }
+  },
 });

@@ -11,7 +11,10 @@ export default function ControllerDevPage() {
 
   return (
     <div>
-      <div class="dev-warning">
+      <div
+        class="dev-warning"
+        style="background-color: #fdf6b2; color: #723b13; padding: 12px; border-radius: 4px; margin-bottom: 20px; text-align: center; border: 1px solid #f3cc4a;"
+      >
         <strong>Development Mode</strong> - OAuth authentication bypassed
       </div>
       <Controller user={mockUser} />

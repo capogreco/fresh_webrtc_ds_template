@@ -3,6 +3,13 @@ import { Handlers } from "$fresh/server.ts";
 // Set the Time-To-Live for the Twilio TURN credentials
 const TTL = 3600; // 1 hour in seconds
 
+// Fallback STUN servers to use when Twilio credentials are not available
+const FALLBACK_ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+];
+
 export const handler: Handlers = {
   async GET(req) {
     try {
@@ -10,13 +17,18 @@ export const handler: Handlers = {
       const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
 
       if (!accountSid || !authToken) {
+        console.log("Missing Twilio credentials, using fallback STUN servers");
         return new Response(
           JSON.stringify({
-            error: "Missing Twilio credentials",
+            iceServers: FALLBACK_ICE_SERVERS,
+            source: "fallback",
           }),
           {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": `public, max-age=${TTL}`,
+            },
           },
         );
       }
@@ -41,14 +53,19 @@ export const handler: Handlers = {
         const errorText = await response.text();
         console.error("Twilio API error:", errorText);
 
+        // If Twilio fails, use fallback STUN servers
         return new Response(
           JSON.stringify({
+            iceServers: FALLBACK_ICE_SERVERS,
+            source: "fallback-after-error",
             error: "Failed to retrieve Twilio ICE servers",
-            details: errorText,
           }),
           {
-            status: response.status,
-            headers: { "Content-Type": "application/json" },
+            status: 200, // Return 200 with fallback servers
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": `public, max-age=${TTL}`,
+            },
           },
         );
       }
@@ -59,7 +76,10 @@ export const handler: Handlers = {
       const iceServers = data.ice_servers;
 
       return new Response(
-        JSON.stringify({ iceServers }),
+        JSON.stringify({
+          iceServers,
+          source: "twilio",
+        }),
         {
           headers: {
             "Content-Type": "application/json",
@@ -70,14 +90,19 @@ export const handler: Handlers = {
     } catch (error) {
       console.error("Error fetching Twilio ICE servers:", error);
 
+      // Return fallback servers even if an exception occurs
       return new Response(
         JSON.stringify({
+          iceServers: FALLBACK_ICE_SERVERS,
+          source: "fallback-after-exception",
           error: "Internal server error",
-          details: error.message,
         }),
         {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
+          status: 200, // Return 200 with fallback servers
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": `public, max-age=${TTL}`,
+          },
         },
       );
     }

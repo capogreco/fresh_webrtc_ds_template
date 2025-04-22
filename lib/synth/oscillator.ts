@@ -3,7 +3,11 @@
  * Contains parameters related to the primary tone generation: frequency, waveform, detune
  */
 
-import { createNumberParam, createEnumParam, createBooleanParam } from "./core/params.ts";
+import {
+  createBooleanParam,
+  createEnumParam,
+  createNumberParam,
+} from "./core/params.ts";
 import { OscillatorType } from "./core/types.ts";
 
 // === Constants ===
@@ -54,7 +58,7 @@ export const frequencyParam = createNumberParam({
   min: MIN_FREQUENCY,
   max: MAX_FREQUENCY,
   defaultValue: CONCERT_A4,
-  format: (val) => `${val.toFixed(2)}Hz`
+  format: (val) => `${val.toFixed(2)}Hz`,
 });
 
 /** Oscillator waveform parameter descriptor */
@@ -62,14 +66,14 @@ export const waveformParam = createEnumParam<OscillatorType>({
   name: "waveform",
   values: ["sine", "square", "sawtooth", "triangle"] as const,
   defaultValue: "sine",
-  format: (val) => val.charAt(0).toUpperCase() + val.slice(1)
+  format: (val) => val.charAt(0).toUpperCase() + val.slice(1),
 });
 
 /** Oscillator enable/disable parameter descriptor */
 export const oscillatorEnabledParam = createBooleanParam({
   name: "oscillatorEnabled",
   defaultValue: true,
-  format: (val) => val ? "Enabled" : "Disabled"
+  format: (val) => val ? "Enabled" : "Disabled",
 });
 
 /** Detune parameter descriptor */
@@ -78,7 +82,7 @@ export const detuneParam = createNumberParam({
   min: MIN_DETUNE,
   max: MAX_DETUNE,
   defaultValue: 0,
-  format: (val) => val > 0 ? `+${val}¢` : `${val}¢`
+  format: (val) => val > 0 ? `+${val}¢` : `${val}¢`,
 });
 
 // === Helper Functions ===

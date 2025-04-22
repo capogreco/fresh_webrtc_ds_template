@@ -5,64 +5,81 @@ import Controller from "../../islands/Controller.tsx";
 // OAuth configuration
 // Manually construct Google OAuth URL function to avoid stringify issues
 function getGoogleAuthUrl() {
-  const clientId = Deno.env.get("GOOGLE_CLIENT_ID") || "";
-  if (!clientId) {
-    console.error("Missing GOOGLE_CLIENT_ID environment variable");
+  try {
+    const clientId = Deno.env.get("GOOGLE_CLIENT_ID") || "";
+    if (!clientId) {
+      console.error("Missing GOOGLE_CLIENT_ID environment variable");
+      return "";
+    }
+
+    const redirectUri = `${
+      Deno.env.get("BASE_URL") || "http://localhost:8000"
+    }/ctrl/callback`;
+    const scope = "email profile";
+
+    // Debug logging
+    console.log("BASE_URL env:", Deno.env.get("BASE_URL"));
+    console.log("Calculated redirectUri:", redirectUri);
+
+    // Generate a random state parameter to prevent CSRF
+    const state = crypto.randomUUID();
+
+    // Build the URL manually
+    const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    url.searchParams.append("client_id", clientId);
+    url.searchParams.append("redirect_uri", redirectUri);
+    url.searchParams.append("response_type", "code");
+    url.searchParams.append("scope", scope);
+    url.searchParams.append("state", state);
+    url.searchParams.append("access_type", "offline");
+    url.searchParams.append("prompt", "consent");
+
+    // More detailed debug output
+    console.log("Generated manual auth URL:", url.toString());
+    console.log("URL parameters:");
+    url.searchParams.forEach((value, key) => {
+      console.log(`  ${key}: ${value}`);
+    });
+
+    return url.toString();
+  } catch (error) {
+    console.error("Error generating Google Auth URL:", error);
     return "";
   }
-
-  const redirectUri = `${
-    Deno.env.get("BASE_URL") || "http://localhost:8000"
-  }/ctrl/callback`;
-  const scope = "email profile";
-
-  // Debug logging
-  console.log("BASE_URL env:", Deno.env.get("BASE_URL"));
-  console.log("Calculated redirectUri:", redirectUri);
-
-  // Generate a random state parameter to prevent CSRF
-  const state = crypto.randomUUID();
-
-  // Build the URL manually
-  const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  url.searchParams.append("client_id", clientId);
-  url.searchParams.append("redirect_uri", redirectUri);
-  url.searchParams.append("response_type", "code");
-  url.searchParams.append("scope", scope);
-  url.searchParams.append("state", state);
-  url.searchParams.append("access_type", "offline");
-  url.searchParams.append("prompt", "consent");
-
-  // More detailed debug output
-  console.log("Generated manual auth URL:", url.toString());
-  console.log("URL parameters:");
-  url.searchParams.forEach((value, key) => {
-    console.log(`  ${key}: ${value}`);
-  });
-
-  return url.toString();
 }
 
-const oauth2Client = new OAuth2Client({
-  clientId: Deno.env.get("GOOGLE_CLIENT_ID") || "",
-  clientSecret: Deno.env.get("GOOGLE_CLIENT_SECRET") || "",
-  authorizationEndpointUri: "https://accounts.google.com/o/oauth2/v2/auth",
-  tokenUri: "https://oauth2.googleapis.com/token",
-  redirectUri: `${
-    Deno.env.get("BASE_URL") || "http://localhost:8000"
-  }/ctrl/callback`,
-  defaults: {
-    scope: "email profile",
-  },
-});
+// Initialize OAuth client safely
+let oauth2Client;
+try {
+  oauth2Client = new OAuth2Client({
+    clientId: Deno.env.get("GOOGLE_CLIENT_ID") || "",
+    clientSecret: Deno.env.get("GOOGLE_CLIENT_SECRET") || "",
+    authorizationEndpointUri: "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenUri: "https://oauth2.googleapis.com/token",
+    redirectUri: `${
+      Deno.env.get("BASE_URL") || "http://localhost:8000"
+    }/ctrl/callback`,
+    defaults: {
+      scope: "email profile",
+    },
+  });
+} catch (error) {
+  console.error("Error initializing OAuth client:", error);
+}
 
 // Allowed email(s) that can access the controller
 const ALLOWED_EMAILS = [
   Deno.env.get("ALLOWED_EMAIL") || "your-email@example.com",
 ];
 
-// Controller lock in Deno KV
-const kv = await Deno.openKv();
+// Controller lock in Deno KV - initialize safely
+let kv;
+try {
+  kv = await Deno.openKv();
+} catch (error) {
+  console.error("Error opening KV store:", error);
+}
+
 const CONTROLLER_LOCK_KEY = ["webrtc:controller:lock"];
 const CONTROLLER_LOCK_TTL_MS = 1000 * 60 * 5; // 5 minutes TTL for controller lock
 
@@ -74,80 +91,163 @@ function getCookieValue(cookieStr: string, name: string): string | null {
 
 export const handler: Handlers = {
   async GET(req, ctx) {
-    // For regular page access, check if the user is authenticated
-    const sessionId = getCookieValue(
-      req.headers.get("cookie") || "",
-      "session",
-    );
+    try {
+      // Check if this is a production deployment without env vars set
+      const isProdWithoutEnvVars = !Deno.env.get("GOOGLE_CLIENT_ID") &&
+        req.url.includes("deno.dev");
 
-    if (!sessionId) {
-      // User is not logged in, create authorization URI using our manual function
-      const loginUrl = getGoogleAuthUrl();
+      if (isProdWithoutEnvVars) {
+        console.log(
+          "Production deployment detected without OAuth environment variables",
+        );
+        // Redirect to dev controller in production if no OAuth credentials
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "/ctrl/dev" },
+        });
+      }
 
-      // Show a login page with a button instead of automatic redirect
-      return ctx.render({
-        needsLogin: true,
-        loginUrl: loginUrl,
-      });
-    }
-
-    // Verify the session
-    const sessionData = await kv.get(["webrtc:sessions", sessionId]);
-
-    if (!sessionData.value || (sessionData.value.expiresAt < Date.now())) {
-      // Session is invalid or expired
-      const authorizationUri = await oauth2Client.code.getAuthorizationUri();
-
-      // Convert the URI to a string
-      const loginUrl = authorizationUri.toString();
-
-      // Debug logging for the expired session case
-      console.log("===== EXPIRED SESSION AUTH DEBUG =====");
-      console.log("Generated login URL (expired session):", loginUrl);
-      console.log("Current oauth2Client config:", {
-        clientId: Deno.env.get("GOOGLE_CLIENT_ID") ? "Set" : "Not set",
-        redirectUri: oauth2Client.redirectUri,
-      });
-
-      // Clear the invalid session cookie
-      const headers = new Headers();
-      headers.set(
-        "Set-Cookie",
-        "session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+      // For regular page access, check if the user is authenticated
+      const sessionId = getCookieValue(
+        req.headers.get("cookie") || "",
+        "session",
       );
 
-      // Show login page with message about expired session
+      // Make sure KV is available
+      if (!kv) {
+        console.error("KV store is not available");
+        return ctx.render({
+          error:
+            "Database connection failed. Please check server configuration.",
+        });
+      }
+
+      if (!sessionId) {
+        // User is not logged in, create authorization URI using our manual function
+        const loginUrl = getGoogleAuthUrl();
+
+        // Show a login page with a button instead of automatic redirect
+        return ctx.render({
+          needsLogin: true,
+          loginUrl: loginUrl,
+        });
+      }
+
+      // Verify the session
+      const sessionData = await kv.get(["webrtc:sessions", sessionId]);
+
+      if (!sessionData.value || (sessionData.value.expiresAt < Date.now())) {
+        // Session is invalid or expired
+        if (!oauth2Client) {
+          console.error("OAuth client not available");
+          return ctx.render({
+            error:
+              "Authentication system unavailable. Please check server configuration.",
+          });
+        }
+
+        const authorizationUri = await oauth2Client.code.getAuthorizationUri();
+
+        // Convert the URI to a string
+        const loginUrl = authorizationUri.toString();
+
+        // Debug logging for the expired session case
+        console.log("===== EXPIRED SESSION AUTH DEBUG =====");
+        console.log("Generated login URL (expired session):", loginUrl);
+        console.log("Current oauth2Client config:", {
+          clientId: Deno.env.get("GOOGLE_CLIENT_ID") ? "Set" : "Not set",
+          redirectUri: oauth2Client.redirectUri,
+        });
+
+        // Clear the invalid session cookie
+        const headers = new Headers();
+        headers.set(
+          "Set-Cookie",
+          "session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+        );
+
+        // Show login page with message about expired session
+        return ctx.render({
+          needsLogin: true,
+          loginUrl: loginUrl,
+          sessionExpired: true,
+        }, { headers });
+      }
+
+      // Check if controller is already locked
+      const controllerLock = await kv.get(CONTROLLER_LOCK_KEY);
+
+      // Data to pass to the page
+      const data = {
+        user: {
+          ...sessionData.value,
+          id: sessionId, // Add the ID field for the client code
+        },
+        isControllerActive: !!controllerLock.value,
+        controllerId: controllerLock.value?.userId || null,
+      };
+
+      return ctx.render(data);
+    } catch (error) {
+      console.error("Error in controller route handler:", error);
+      // Return a friendly error page with details
       return ctx.render({
-        needsLogin: true,
-        loginUrl: loginUrl,
-        sessionExpired: true,
-      }, { headers });
+        error:
+          "An error occurred while loading the controller page. Please try again later.",
+        details: error.message,
+        stack: error.stack,
+      });
     }
-
-    // Check if controller is already locked
-    const controllerLock = await kv.get(CONTROLLER_LOCK_KEY);
-
-    // Data to pass to the page
-    const data = {
-      user: {
-        ...sessionData.value,
-        id: sessionId, // Add the ID field for the client code
-      },
-      isControllerActive: !!controllerLock.value,
-      controllerId: controllerLock.value?.userId || null,
-    };
-
-    return ctx.render(data);
   },
 };
 
 export default function ControllerPage({ data }: PageProps) {
+  // Check for server error
+  if (data.error) {
+    return (
+      <div class="container">
+        <h1>Error</h1>
+        <p>{data.error}</p>
+        {data.details && (
+          <div style="margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 4px;">
+            <p>
+              <strong>Details:</strong> {data.details}
+            </p>
+            {data.stack && (
+              <pre style="margin-top: 10px; white-space: pre-wrap; overflow-x: auto; font-size: 12px; background-color: #f0f0f0; padding: 10px; border-radius: 4px;">
+                {data.stack}
+              </pre>
+            )}
+          </div>
+        )}
+        <div style="margin-top: 20px;">
+          <a
+            href="/ctrl/dev"
+            class="activate-button"
+            style="text-decoration: none; display: inline-block;"
+          >
+            Try Development Version
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   // Make sure data is properly formatted
   if (!data || typeof data !== "object") {
     return (
       <div class="container">
         <h1>Error</h1>
         <p>Invalid data format. Please try again.</p>
+        <div style="margin-top: 20px;">
+          <a
+            href="/ctrl/dev"
+            class="activate-button"
+            style="text-decoration: none; display: inline-block;"
+          >
+            Try Development Version
+          </a>
+        </div>
       </div>
     );
   }
@@ -175,21 +275,41 @@ export default function ControllerPage({ data }: PageProps) {
           )}
 
         <div style="margin-top: 30px;">
-          <a
-            href={data.loginUrl || "#"}
-            class="activate-button"
-            style="text-decoration: none; display: inline-block;"
-            onClick={(e) => {
-              // Check if loginUrl is missing or invalid
-              if (!data.loginUrl || typeof data.loginUrl !== "string") {
-                e.preventDefault();
-                console.error("Invalid login URL:", data.loginUrl);
-                alert("Login URL is invalid. Please try refreshing the page.");
-              }
-            }}
-          >
-            Login with Google
-          </a>
+          {data.loginUrl
+            ? (
+              <a
+                href={data.loginUrl}
+                class="activate-button"
+                style="text-decoration: none; display: inline-block;"
+                onClick={(e) => {
+                  // Check if loginUrl is missing or invalid
+                  if (!data.loginUrl || typeof data.loginUrl !== "string") {
+                    e.preventDefault();
+                    console.error("Invalid login URL:", data.loginUrl);
+                    alert(
+                      "Login URL is invalid. Please try refreshing the page.",
+                    );
+                  }
+                }}
+              >
+                Login with Google
+              </a>
+            )
+            : (
+              <div>
+                <p style="color: #e53e3e;">
+                  Unable to generate login URL. OAuth configuration may be
+                  incomplete.
+                </p>
+                <a
+                  href="/ctrl/dev"
+                  class="activate-button"
+                  style="text-decoration: none; display: inline-block; margin-top: 20px;"
+                >
+                  Use Development Version
+                </a>
+              </div>
+            )}
         </div>
       </div>
     );
@@ -203,6 +323,15 @@ export default function ControllerPage({ data }: PageProps) {
       <div class="container">
         <h1>Authentication Error</h1>
         <p>User data is missing or invalid. Please try again.</p>
+        <div style="margin-top: 20px;">
+          <a
+            href="/ctrl/dev"
+            class="activate-button"
+            style="text-decoration: none; display: inline-block;"
+          >
+            Try Development Version
+          </a>
+        </div>
       </div>
     );
   }

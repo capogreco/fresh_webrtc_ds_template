@@ -18,7 +18,12 @@ export * from "./volume.ts";
 import { SynthParams } from "./core/types.ts";
 
 // Import parameter descriptors from component modules
-import { frequencyParam, waveformParam, oscillatorEnabledParam, detuneParam } from "./oscillator.ts";
+import {
+  detuneParam,
+  frequencyParam,
+  oscillatorEnabledParam,
+  waveformParam,
+} from "./oscillator.ts";
 import { filterCutoffParam, filterResonanceParam } from "./filter.ts";
 import { attackParam, releaseParam } from "./envelope.ts";
 import { vibratoRateParam, vibratoWidthParam } from "./vibrato.ts";
@@ -34,24 +39,24 @@ export const DEFAULT_SYNTH_PARAMS: SynthParams = {
   waveform: waveformParam.defaultValue,
   oscillatorEnabled: oscillatorEnabledParam.defaultValue,
   detune: detuneParam.defaultValue,
-  
+
   // Envelope
   attack: attackParam.defaultValue,
   release: releaseParam.defaultValue,
-  
+
   // Filter
   filterCutoff: filterCutoffParam.defaultValue,
   filterResonance: filterResonanceParam.defaultValue,
-  
+
   // Vibrato
   vibratoRate: vibratoRateParam.defaultValue,
   vibratoWidth: vibratoWidthParam.defaultValue,
-  
+
   // Portamento
   portamentoTime: portamentoTimeParam.defaultValue,
-  
+
   // Volume
-  volume: volumeParam.defaultValue
+  volume: volumeParam.defaultValue,
 };
 
 /**
@@ -69,15 +74,17 @@ export const PARAM_DESCRIPTORS = {
   vibratoRate: vibratoRateParam,
   vibratoWidth: vibratoWidthParam,
   portamentoTime: portamentoTimeParam,
-  volume: volumeParam
+  volume: volumeParam,
 };
 
 /**
  * Validates a partial set of parameters and returns a complete set with defaults
  */
-export function validateSynthParams(partialParams: Partial<SynthParams>): SynthParams {
+export function validateSynthParams(
+  partialParams: Partial<SynthParams>,
+): SynthParams {
   const result = { ...DEFAULT_SYNTH_PARAMS };
-  
+
   // Apply each provided parameter with validation
   for (const [key, value] of Object.entries(partialParams)) {
     const paramKey = key as keyof SynthParams;
@@ -87,6 +94,6 @@ export function validateSynthParams(partialParams: Partial<SynthParams>): SynthP
       (result[paramKey] as unknown) = descriptor.validate(value);
     }
   }
-  
+
   return result;
 }
