@@ -14,9 +14,15 @@ import {
   validateVibratoWidth,
   validatePortamentoTime,
   DEFAULT_SYNTH_PARAMS,
-  frequencyToNote
+  frequencyToNote,
+  noteToFrequency
 } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
+import { Signal } from "@preact/signals";
+
+// Type definitions for abstracted functionality
+type ParamHandler = (value: any, source?: string) => void;
+type MessageHandler = (event: MessageEvent, channel: RTCDataChannel) => void;
 
 // Audio context for the synth
 let audioContext: AudioContext | null = null;
@@ -72,6 +78,266 @@ export default function WebRTC() {
       if (logEl) logEl.scrollTop = logEl.scrollHeight;
     }, 0);
   };
+  
+  // Utility for sending a parameter update to controller
+  const sendParamToController = (param: string, value: any) => {
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param,
+          value,
+        }));
+      } catch (error) {
+        console.error(`Error sending ${param} update:`, error);
+      }
+    }
+  };
+  
+  // Utility for sending all synth parameters to controller
+  const sendAllSynthParameters = (channel: RTCDataChannel) => {
+    try {
+      // Define all parameters to send
+      const params = [
+        { param: "frequency", value: frequency.value },
+        { param: "waveform", value: waveform.value },
+        { param: "volume", value: volume.value },
+        { param: "oscillatorEnabled", value: oscillatorEnabled.value },
+        { param: "detune", value: detune.value },
+        { param: "attack", value: attack.value },
+        { param: "release", value: release.value },
+        { param: "filterCutoff", value: filterCutoff.value },
+        { param: "filterResonance", value: filterResonance.value },
+        { param: "vibratoRate", value: vibratoRate.value },
+        { param: "vibratoWidth", value: vibratoWidth.value },
+        { param: "portamentoTime", value: portamentoTime.value },
+      ];
+      
+      // Send each parameter
+      params.forEach(({ param, value }) => {
+        channel.send(JSON.stringify({
+          type: "synth_param",
+          param,
+          value,
+        }));
+      });
+      
+      // Send audio state
+      channel.send(JSON.stringify({
+        type: "audio_state",
+        isMuted: isMuted.value,
+        audioState: audioState.value,
+      }));
+      
+      addLog("Sent synth parameters and audio state to controller");
+    } catch (error) {
+      console.error("Error sending synth parameters:", error);
+    }
+  };
+  
+  // Send only audio state to controller
+  const sendAudioStateOnly = (channel: RTCDataChannel) => {
+    try {
+      channel.send(JSON.stringify({
+        type: "audio_state",
+        isMuted: true, // Audio is muted
+        audioState: "disabled",
+      }));
+      addLog("Sent audio state to controller (audio not enabled)");
+    } catch (error) {
+      console.error("Error sending audio state:", error);
+    }
+  };
+  
+  // Handle ping messages
+  const handlePingMessage = (data: string, channel: RTCDataChannel, prefix: string = "") => {
+    console.log(`[${prefix}] PING detected!`);
+    
+    // Create pong response by replacing PING with PONG
+    const pongMessage = data.replace("PING:", "PONG:");
+    console.log(`[${prefix}] Sending PONG:`, pongMessage);
+    
+    // Send the response immediately
+    try {
+      // Add a small delay to ensure message is processed
+      setTimeout(() => {
+        try {
+          channel.send(pongMessage);
+          console.log(`[${prefix}] PONG sent successfully`);
+          addLog(`Responded with ${pongMessage}`);
+        } catch (e) {
+          console.error(`[${prefix}] Failed to send delayed PONG:`, e);
+        }
+      }, 10);
+      
+      // Also try sending immediately
+      channel.send(pongMessage);
+      console.log(`[${prefix}] PONG sent immediately`);
+    } catch (error) {
+      console.error(`[${prefix}] Error sending PONG:`, error);
+      addLog(`Failed to respond to ping: ${error.message}`);
+    }
+  };
+  
+  // Handle test messages
+  const handleTestMessage = (data: string, channel: RTCDataChannel, prefix: string = "") => {
+    console.log(`[${prefix}] TEST message detected!`);
+    
+    // Reply with the same test message
+    try {
+      // Echo back the test message
+      channel.send(`ECHOED:${data}`);
+      console.log(`[${prefix}] Echoed test message`);
+      addLog(`Echoed test message`);
+    } catch (error) {
+      console.error(`[${prefix}] Error echoing test message:`, error);
+      addLog(`Failed to echo test message: ${error.message}`);
+    }
+  };
+  
+  // Unified parameter handler map
+  const paramHandlers: Record<string, ParamHandler> = {
+    frequency: (value, source = "controller") => {
+      const validValue = validateFrequency(Number(value));
+      updateFrequency(validValue);
+      addLog(`Frequency updated to ${validValue}Hz by ${source}`);
+    },
+    waveform: (value, source = "controller") => {
+      const validValue = validateWaveform(value);
+      updateWaveform(validValue);
+      addLog(`Waveform updated to ${validValue} by ${source}`);
+    },
+    volume: (value, source = "controller") => {
+      const validValue = validateVolume(Number(value));
+      updateVolume(validValue);
+      addLog(`Volume updated to ${validValue} by ${source}`);
+    },
+    detune: (value, source = "controller") => {
+      const validValue = validateDetune(Number(value));
+      updateDetune(validValue);
+      addLog(`Detune updated to ${validValue} cents by ${source}`);
+    },
+    oscillatorEnabled: (value, source = "controller") => {
+      const enabled = value === true || value === "true" || value === 1;
+      toggleOscillator(enabled);
+      addLog(`Oscillator ${enabled ? "enabled" : "disabled"} by ${source}`);
+    },
+    attack: (value, source = "controller") => {
+      const validValue = validateAttack(Number(value));
+      updateAttack(validValue);
+      addLog(`Attack updated to ${validValue}s by ${source}`);
+    },
+    release: (value, source = "controller") => {
+      const validValue = validateRelease(Number(value));
+      updateRelease(validValue);
+      addLog(`Release updated to ${validValue}s by ${source}`);
+    },
+    filterCutoff: (value, source = "controller") => {
+      const validValue = validateFilterCutoff(Number(value));
+      updateFilterCutoff(validValue);
+      addLog(`Filter cutoff updated to ${validValue}Hz by ${source}`);
+    },
+    filterResonance: (value, source = "controller") => {
+      const validValue = validateFilterResonance(Number(value));
+      updateFilterResonance(validValue);
+      addLog(`Filter resonance updated to ${validValue} by ${source}`);
+    },
+    vibratoRate: (value, source = "controller") => {
+      const validValue = validateVibratoRate(Number(value));
+      updateVibratoRate(validValue);
+      addLog(`Vibrato rate updated to ${validValue}Hz by ${source}`);
+    },
+    vibratoWidth: (value, source = "controller") => {
+      const validValue = validateVibratoWidth(Number(value));
+      updateVibratoWidth(validValue);
+      addLog(`Vibrato width updated to ${validValue} cents by ${source}`);
+    },
+    portamentoTime: (value, source = "controller") => {
+      const validValue = validatePortamentoTime(Number(value));
+      updatePortamentoTime(validValue);
+      addLog(`Portamento time updated to ${validValue}s by ${source}`);
+    },
+    note: (value, source = "controller") => {
+      // Convert note to frequency (physics-based approach)
+      const noteFreq = noteToFrequency(value as string);
+      updateFrequency(noteFreq);
+      currentNote.value = value as string;
+      addLog(`Note ${value} (${noteFreq}Hz) set by ${source}`);
+    }
+  };
+  
+  // Unified channel message handler
+  const handleChannelMessage = (event: MessageEvent, channel: RTCDataChannel, prefix: string = "") => {
+    console.log(`[${prefix || "CLIENT"}] Received message:`, event.data);
+    
+    // Try to parse JSON messages
+    if (typeof event.data === "string" && event.data.startsWith("{")) {
+      try {
+        const message = JSON.parse(event.data);
+        
+        // Handle synth parameter update messages
+        if (message.type === "synth_param") {
+          const param = message.param;
+          const value = message.value;
+          
+          if (paramHandlers[param]) {
+            paramHandlers[param](value, prefix ? `${prefix} controller` : "controller");
+          } else {
+            console.warn(`Unknown synth parameter: ${param}`);
+            addLog(`Unknown synth parameter: ${param}`);
+          }
+          return;
+        }
+      } catch (error) {
+        console.error(`Error parsing JSON message:`, error);
+        // Continue with non-JSON message handling
+      }
+    }
+    
+    // Handle PING messages
+    if (typeof event.data === "string" && event.data.startsWith("PING:")) {
+      handlePingMessage(event.data, channel, prefix);
+      return;
+    }
+    
+    // Handle TEST messages
+    if (typeof event.data === "string" && event.data.startsWith("TEST:")) {
+      handleTestMessage(event.data, channel, prefix);
+      return;
+    }
+    
+    // Regular message
+    addLog(`Received: ${event.data}`);
+  };
+  
+  // Setup channel event handlers
+  const setupDataChannel = (channel: RTCDataChannel, prefix: string = "") => {
+    channel.onopen = () => {
+      addLog(`Data channel opened${prefix ? ` (${prefix})` : ""}`);
+      connected.value = true;
+      
+      // Send current synth parameters to the controller
+      if (!isMuted.value) { // Not muted means audio is enabled
+        sendAllSynthParameters(channel);
+      } else {
+        // Even if audio is not enabled, send the audio state
+        sendAudioStateOnly(channel);
+      }
+    };
+    
+    channel.onclose = () => {
+      addLog(`Data channel closed${prefix ? ` (${prefix})` : ""}`);
+      
+      // Disconnection not initiated by user, try to reconnect
+      disconnect(false);
+    };
+    
+    channel.onmessage = (event) => {
+      handleChannelMessage(event, channel, prefix);
+    };
+    
+    return channel;
+  };
 
   // Connect to the target peer
   const connect = async () => {
@@ -117,543 +383,17 @@ export default function WebRTC() {
     // Create data channel
     const channel = peerConnection.createDataChannel("dataChannel");
     dataChannel.value = channel;
-
-    channel.onopen = () => {
-      addLog("Data channel opened");
-      connected.value = true;
-
-      // Controller will detect connection through ping/pong
-
-      // Send current synth parameters to the controller
-      if (!isMuted.value) { // Not muted means audio is enabled
-        try {
-          // Send frequency
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "frequency",
-            value: frequency.value,
-          }));
-
-          // Send waveform
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "waveform",
-            value: waveform.value,
-          }));
-
-          // Send volume
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "volume",
-            value: volume.value,
-          }));
-
-          // Send oscillator enabled state
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "oscillatorEnabled",
-            value: oscillatorEnabled.value,
-          }));
-
-          // Send detune
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "detune",
-            value: detune.value,
-          }));
-          
-          // Send attack
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "attack",
-            value: attack.value,
-          }));
-          
-          // Send release
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "release",
-            value: release.value,
-          }));
-          
-          // Send filter cutoff
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "filterCutoff",
-            value: filterCutoff.value,
-          }));
-          
-          // Send filter resonance
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "filterResonance",
-            value: filterResonance.value,
-          }));
-          
-          // Send vibrato rate
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "vibratoRate",
-            value: vibratoRate.value,
-          }));
-          
-          // Send vibrato width
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "vibratoWidth",
-            value: vibratoWidth.value,
-          }));
-          
-          // Send portamento time
-          channel.send(JSON.stringify({
-            type: "synth_param",
-            param: "portamentoTime",
-            value: portamentoTime.value,
-          }));
-
-          // Send audio state
-          channel.send(JSON.stringify({
-            type: "audio_state",
-            isMuted: isMuted.value,
-            audioState: audioState.value,
-          }));
-
-          addLog("Sent synth parameters and audio state to controller");
-        } catch (error) {
-          console.error("Error sending synth parameters:", error);
-        }
-      } else {
-        // Even if audio is not enabled, send the audio state
-        try {
-          channel.send(JSON.stringify({
-            type: "audio_state",
-            isMuted: true, // Audio is muted
-            audioState: "disabled",
-          }));
-          addLog("Sent audio state to controller (audio not enabled)");
-        } catch (error) {
-          console.error("Error sending audio state:", error);
-        }
-      }
-    };
-
-    channel.onclose = () => {
-      addLog("Data channel closed");
-
-      // Disconnection not initiated by user, try to reconnect
-      disconnect(false);
-    };
-
-    channel.onmessage = (event) => {
-      console.log("[CLIENT] Received message:", event.data);
-
-      // Try to parse JSON messages
-      if (typeof event.data === "string" && event.data.startsWith("{")) {
-        try {
-          const message = JSON.parse(event.data);
-
-          // Handle synth parameter update messages
-          if (message.type === "synth_param") {
-            switch (message.param) {
-              case "frequency":
-                const validFreq = validateFrequency(Number(message.value));
-                updateFrequency(validFreq);
-                addLog(`Frequency updated to ${validFreq}Hz by controller`);
-                break;
-              case "waveform":
-                const validWaveform = validateWaveform(message.value);
-                updateWaveform(validWaveform);
-                addLog(`Waveform updated to ${validWaveform} by controller`);
-                break;
-              case "volume":
-                const validVolume = validateVolume(Number(message.value));
-                updateVolume(validVolume);
-                addLog(`Volume updated to ${validVolume} by controller`);
-                break;
-              case "detune":
-                const validDetune = validateDetune(Number(message.value));
-                updateDetune(validDetune);
-                addLog(`Detune updated to ${validDetune} cents by controller`);
-                break;
-              case "oscillatorEnabled":
-                const enabled = message.value === true || message.value === "true" || message.value === 1;
-                toggleOscillator(enabled);
-                addLog(`Oscillator ${enabled ? "enabled" : "disabled"} by controller`);
-                break;
-              case "attack":
-                const validAttack = validateAttack(Number(message.value));
-                updateAttack(validAttack);
-                addLog(`Attack updated to ${validAttack}s by controller`);
-                break;
-              case "release":
-                const validRelease = validateRelease(Number(message.value));
-                updateRelease(validRelease);
-                addLog(`Release updated to ${validRelease}s by controller`);
-                break;
-              case "filterCutoff":
-                const validCutoff = validateFilterCutoff(Number(message.value));
-                updateFilterCutoff(validCutoff);
-                addLog(`Filter cutoff updated to ${validCutoff}Hz by controller`);
-                break;
-              case "filterResonance":
-                const validResonance = validateFilterResonance(Number(message.value));
-                updateFilterResonance(validResonance);
-                addLog(`Filter resonance updated to ${validResonance} by controller`);
-                break;
-              case "vibratoRate":
-                const validVibratoRate = validateVibratoRate(Number(message.value));
-                updateVibratoRate(validVibratoRate);
-                addLog(`Vibrato rate updated to ${validVibratoRate}Hz by controller`);
-                break;
-              case "vibratoWidth":
-                const validVibratoWidth = validateVibratoWidth(Number(message.value));
-                updateVibratoWidth(validVibratoWidth);
-                addLog(`Vibrato width updated to ${validVibratoWidth} cents by controller`);
-                break;
-              case "portamentoTime":
-                const validPortamentoTime = validatePortamentoTime(Number(message.value));
-                updatePortamentoTime(validPortamentoTime);
-                addLog(`Portamento time updated to ${validPortamentoTime}s by controller`);
-                break;
-              default:
-                console.warn(`Unknown synth parameter: ${message.param}`);
-                addLog(`Unknown synth parameter: ${message.param}`);
-            }
-            return;
-          }
-        } catch (error) {
-          console.error("Error parsing JSON message:", error);
-          // Continue with non-JSON message handling
-        }
-      }
-
-      // SUPER SIMPLE PING HANDLING
-      // Instead of any complex parsing, just send back exactly what we receive
-      // with "PONG" instead of "PING"
-      if (typeof event.data === "string" && event.data.startsWith("PING:")) {
-        console.log("[CLIENT] PING detected!");
-
-        // Create pong response by replacing PING with PONG
-        const pongMessage = event.data.replace("PING:", "PONG:");
-        console.log("[CLIENT] Sending PONG:", pongMessage);
-
-        // Send the response immediately
-        try {
-          // Add a small delay to ensure message is processed
-          setTimeout(() => {
-            try {
-              channel.send(pongMessage);
-              console.log("[CLIENT] PONG sent successfully");
-              addLog(`Responded with ${pongMessage}`);
-            } catch (e) {
-              console.error("[CLIENT] Failed to send delayed PONG:", e);
-            }
-          }, 10);
-
-          // Also try sending immediately
-          channel.send(pongMessage);
-          console.log("[CLIENT] PONG sent immediately");
-        } catch (error) {
-          console.error("[CLIENT] Error sending PONG:", error);
-          addLog(`Failed to respond to ping: ${error.message}`);
-        }
-        return;
-      }
-
-      // Also handle TEST messages for debug purposes
-      if (typeof event.data === "string" && event.data.startsWith("TEST:")) {
-        console.log("[CLIENT] TEST message detected!");
-
-        // Reply with the same test message
-        try {
-          // Echo back the test message
-          channel.send(`ECHOED:${event.data}`);
-          console.log("[CLIENT] Echoed test message");
-          addLog(`Echoed test message`);
-        } catch (error) {
-          console.error("[CLIENT] Error echoing test message:", error);
-          addLog(`Failed to echo test message: ${error.message}`);
-        }
-        return;
-      }
-
-      // Regular message
-      addLog(`Received: ${event.data}`);
-    };
+    
+    // Setup the data channel with our unified handlers
+    setupDataChannel(channel, "CLIENT");
 
     // Handle receiving a data channel
     peerConnection.ondatachannel = (event) => {
       const receivedChannel = event.channel;
       dataChannel.value = receivedChannel;
-
-      receivedChannel.onopen = () => {
-        addLog("Data channel opened (received)");
-        connected.value = true;
-
-        // Controller will detect connection through ping/pong
-
-        // Send current synth parameters to the controller
-        if (!isMuted.value) { // Not muted means audio is enabled
-          try {
-            // Send frequency
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "frequency",
-              value: frequency.value,
-            }));
-
-            // Send waveform
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "waveform",
-              value: waveform.value,
-            }));
-
-            // Send volume
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "volume",
-              value: volume.value,
-            }));
-
-            // Send oscillator enabled state
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "oscillatorEnabled",
-              value: oscillatorEnabled.value,
-            }));
-
-            // Send detune
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "detune",
-              value: detune.value,
-            }));
-            
-            // Send attack
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "attack",
-              value: attack.value,
-            }));
-            
-            // Send release
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "release",
-              value: release.value,
-            }));
-            
-            // Send filter cutoff
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "filterCutoff",
-              value: filterCutoff.value,
-            }));
-            
-            // Send filter resonance
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "filterResonance",
-              value: filterResonance.value,
-            }));
-            
-            // Send vibrato rate
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "vibratoRate",
-              value: vibratoRate.value,
-            }));
-            
-            // Send vibrato width
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "vibratoWidth",
-              value: vibratoWidth.value,
-            }));
-            
-            // Send portamento time
-            receivedChannel.send(JSON.stringify({
-              type: "synth_param",
-              param: "portamentoTime",
-              value: portamentoTime.value,
-            }));
-
-            // Send audio state
-            receivedChannel.send(JSON.stringify({
-              type: "audio_state",
-              isMuted: isMuted.value,
-              audioState: audioState.value,
-            }));
-
-            addLog("Sent synth parameters and audio state to controller");
-          } catch (error) {
-            console.error("Error sending synth parameters:", error);
-          }
-        } else {
-          // Even if audio is not enabled, send the audio state
-          try {
-            receivedChannel.send(JSON.stringify({
-              type: "audio_state",
-              isMuted: true, // Audio is muted
-              audioState: "disabled",
-            }));
-            addLog("Sent audio state to controller (audio not enabled)");
-          } catch (error) {
-            console.error("Error sending audio state:", error);
-          }
-        }
-      };
-
-      receivedChannel.onclose = () => {
-        addLog("Data channel closed (received)");
-
-        // Disconnection not initiated by user, try to reconnect
-        disconnect(false);
-      };
-
-      receivedChannel.onmessage = (event) => {
-        console.log("[CLIENT-RECEIVED] Received message:", event.data);
-
-        // Try to parse JSON messages
-        if (typeof event.data === "string" && event.data.startsWith("{")) {
-          try {
-            const message = JSON.parse(event.data);
-
-            // Handle synth parameter update messages
-            if (message.type === "synth_param") {
-              switch (message.param) {
-                case "frequency":
-                  const validFreq = validateFrequency(Number(message.value));
-                  updateFrequency(validFreq);
-                  addLog(`Frequency updated to ${validFreq}Hz by controller`);
-                  break;
-                case "waveform":
-                  const validWaveform = validateWaveform(message.value);
-                  updateWaveform(validWaveform);
-                  addLog(`Waveform updated to ${validWaveform} by controller`);
-                  break;
-                case "volume":
-                  const validVolume = validateVolume(Number(message.value));
-                  updateVolume(validVolume);
-                  addLog(`Volume updated to ${validVolume} by controller`);
-                  break;
-                case "detune":
-                  const validDetune = validateDetune(Number(message.value));
-                  updateDetune(validDetune);
-                  addLog(`Detune updated to ${validDetune} cents by controller`);
-                  break;
-                case "oscillatorEnabled":
-                  const enabled = message.value === true || message.value === "true" || message.value === 1;
-                  toggleOscillator(enabled);
-                  addLog(`Oscillator ${enabled ? "enabled" : "disabled"} by controller`);
-                  break;
-                case "attack":
-                  const validAttack = validateAttack(Number(message.value));
-                  updateAttack(validAttack);
-                  addLog(`Attack updated to ${validAttack}s by controller`);
-                  break;
-                case "release":
-                  const validRelease = validateRelease(Number(message.value));
-                  updateRelease(validRelease);
-                  addLog(`Release updated to ${validRelease}s by controller`);
-                  break;
-                case "filterCutoff":
-                  const validCutoff = validateFilterCutoff(Number(message.value));
-                  updateFilterCutoff(validCutoff);
-                  addLog(`Filter cutoff updated to ${validCutoff}Hz by controller`);
-                  break;
-                case "filterResonance":
-                  const validResonance = validateFilterResonance(Number(message.value));
-                  updateFilterResonance(validResonance);
-                  addLog(`Filter resonance updated to ${validResonance} by controller`);
-                  break;
-                case "vibratoRate":
-                  const validVibratoRate = validateVibratoRate(Number(message.value));
-                  updateVibratoRate(validVibratoRate);
-                  addLog(`Vibrato rate updated to ${validVibratoRate}Hz by controller`);
-                  break;
-                case "vibratoWidth":
-                  const validVibratoWidth = validateVibratoWidth(Number(message.value));
-                  updateVibratoWidth(validVibratoWidth);
-                  addLog(`Vibrato width updated to ${validVibratoWidth} cents by controller`);
-                  break;
-                case "portamentoTime":
-                  const validPortamentoTime = validatePortamentoTime(Number(message.value));
-                  updatePortamentoTime(validPortamentoTime);
-                  addLog(`Portamento time updated to ${validPortamentoTime}s by controller`);
-                  break;
-                default:
-                  console.warn(`Unknown synth parameter: ${message.param}`);
-                  addLog(`Unknown synth parameter: ${message.param}`);
-              }
-              return;
-            }
-          } catch (error) {
-            console.error("Error parsing JSON message:", error);
-            // Continue with non-JSON message handling
-          }
-        }
-
-        // SUPER SIMPLE PING HANDLING
-        // Instead of any complex parsing, just send back exactly what we receive
-        // with "PONG" instead of "PING"
-        if (typeof event.data === "string" && event.data.startsWith("PING:")) {
-          console.log("[CLIENT-RECEIVED] PING detected!");
-
-          // Create pong response by replacing PING with PONG
-          const pongMessage = event.data.replace("PING:", "PONG:");
-          console.log("[CLIENT-RECEIVED] Sending PONG:", pongMessage);
-
-          // Send the response immediately
-          try {
-            // Add a small delay to ensure message is processed
-            setTimeout(() => {
-              try {
-                receivedChannel.send(pongMessage);
-                console.log("[CLIENT-RECEIVED] PONG sent successfully");
-                addLog(`Responded with ${pongMessage}`);
-              } catch (e) {
-                console.error(
-                  "[CLIENT-RECEIVED] Failed to send delayed PONG:",
-                  e,
-                );
-              }
-            }, 10);
-
-            // Also try sending immediately
-            receivedChannel.send(pongMessage);
-            console.log("[CLIENT-RECEIVED] PONG sent immediately");
-          } catch (error) {
-            console.error("[CLIENT-RECEIVED] Error sending PONG:", error);
-            addLog(`Failed to respond to ping: ${error.message}`);
-          }
-          return;
-        }
-
-        // Also handle TEST messages for debug purposes
-        if (typeof event.data === "string" && event.data.startsWith("TEST:")) {
-          console.log("[CLIENT-RECEIVED] TEST message detected!");
-
-          // Reply with the same test message
-          try {
-            // Echo back the test message
-            receivedChannel.send(`ECHOED:${event.data}`);
-            console.log("[CLIENT-RECEIVED] Echoed test message");
-            addLog(`Echoed test message`);
-          } catch (error) {
-            console.error(
-              "[CLIENT-RECEIVED] Error echoing test message:",
-              error,
-            );
-            addLog(`Failed to echo test message: ${error.message}`);
-          }
-          return;
-        }
-
-        // Regular message
-        addLog(`Received: ${event.data}`);
-      };
+      
+      // Setup the received channel with our unified handlers
+      setupDataChannel(receivedChannel, "RECEIVED");
     };
 
     // Send ICE candidates to the other peer
@@ -965,175 +705,9 @@ export default function WebRTC() {
         console.log("Data channel received in offer handler:", event.channel.label);
         const receivedChannel = event.channel;
         dataChannel.value = receivedChannel;
-
-        receivedChannel.onopen = () => {
-          addLog("Data channel opened (received)");
-          connected.value = true;
-
-          // Send current synth parameters to the controller
-          if (!isMuted.value) { // Not muted means audio is enabled
-            try {
-              // Send frequency
-              receivedChannel.send(JSON.stringify({
-                type: "synth_param",
-                param: "frequency",
-                value: frequency.value,
-              }));
-
-              // Send waveform
-              receivedChannel.send(JSON.stringify({
-                type: "synth_param",
-                param: "waveform",
-                value: waveform.value,
-              }));
-
-              // Send volume
-              receivedChannel.send(JSON.stringify({
-                type: "synth_param",
-                param: "volume",
-                value: volume.value,
-              }));
-
-              // Send audio state
-              receivedChannel.send(JSON.stringify({
-                type: "audio_state",
-                isMuted: isMuted.value,
-                audioState: audioState.value,
-              }));
-
-              addLog("Sent synth parameters and audio state to controller");
-            } catch (error) {
-              console.error("Error sending synth parameters:", error);
-            }
-          } else {
-            // Even if audio is not enabled, send the audio state
-            try {
-              receivedChannel.send(JSON.stringify({
-                type: "audio_state",
-                isMuted: true, // Audio is muted
-                audioState: "disabled",
-              }));
-              addLog("Sent audio state to controller (audio not enabled)");
-            } catch (error) {
-              console.error("Error sending audio state:", error);
-            }
-          }
-        };
-
-        receivedChannel.onclose = () => {
-          addLog("Data channel closed (received)");
-
-          // Disconnection not initiated by user, try to reconnect
-          disconnect(false);
-        };
-
-        receivedChannel.onmessage = (event) => {
-          console.log("[CLIENT-ALT] Received message:", event.data);
-
-          // Try to parse JSON messages
-          if (typeof event.data === "string" && event.data.startsWith("{")) {
-            try {
-              const message = JSON.parse(event.data);
-
-              // Handle synth parameter update messages
-              if (message.type === "synth_param") {
-                switch (message.param) {
-                  case "frequency":
-                    updateFrequency(Number(message.value));
-                    addLog(
-                      `Frequency updated to ${message.value}Hz by controller`,
-                    );
-                    break;
-                  case "waveform":
-                    updateWaveform(message.value as OscillatorType);
-                    addLog(
-                      `Waveform updated to ${message.value} by controller`,
-                    );
-                    break;
-                  case "volume":
-                    updateVolume(Number(message.value));
-                    addLog(`Volume updated to ${message.value} by controller`);
-                    break;
-                  case "oscillatorEnabled":
-                    console.log(
-                      `[SYNTH] Received oscillatorEnabled parameter: ${message.value}, type: ${typeof message
-                        .value}`,
-                    );
-                    // Convert various types to boolean properly
-                    const enabled = message.value === true ||
-                      message.value === "true" || message.value === 1;
-                    console.log(
-                      `[SYNTH] Converted value to boolean: ${enabled}`,
-                    );
-                    toggleOscillator(enabled);
-                    addLog(
-                      `Oscillator ${
-                        enabled ? "enabled" : "disabled"
-                      } by controller`,
-                    );
-                    break;
-                  case "note":
-                    // Convert note to frequency (physics-based approach)
-                    const noteFreq = noteToFrequency(message.value as string);
-                    updateFrequency(noteFreq);
-                    currentNote.value = message.value as string;
-                    addLog(`Note ${message.value} (${noteFreq}Hz) set by controller`);
-                    break;
-                  case "detune":
-                    updateDetune(Number(message.value));
-                    addLog(
-                      `Detune set to ${message.value} cents by controller`,
-                    );
-                    break;
-                  case "attack":
-                    const validAttack = validateAttack(Number(message.value));
-                    updateAttack(validAttack);
-                    addLog(`Attack updated to ${validAttack}s by controller`);
-                    break;
-                  case "release":
-                    const validRelease = validateRelease(Number(message.value));
-                    updateRelease(validRelease);
-                    addLog(`Release updated to ${validRelease}s by controller`);
-                    break;
-                  case "filterCutoff":
-                    const validCutoff = validateFilterCutoff(Number(message.value));
-                    updateFilterCutoff(validCutoff);
-                    addLog(`Filter cutoff updated to ${validCutoff}Hz by controller`);
-                    break;
-                  case "filterResonance":
-                    const validResonance = validateFilterResonance(Number(message.value));
-                    updateFilterResonance(validResonance);
-                    addLog(`Filter resonance updated to ${validResonance} by controller`);
-                    break;
-                  case "vibratoRate":
-                    const validVibratoRate = validateVibratoRate(Number(message.value));
-                    updateVibratoRate(validVibratoRate);
-                    addLog(`Vibrato rate updated to ${validVibratoRate}Hz by controller`);
-                    break;
-                  case "vibratoWidth":
-                    const validVibratoWidth = validateVibratoWidth(Number(message.value));
-                    updateVibratoWidth(validVibratoWidth);
-                    addLog(`Vibrato width updated to ${validVibratoWidth} cents by controller`);
-                    break;
-                  case "portamentoTime":
-                    const validPortamentoTime = validatePortamentoTime(Number(message.value));
-                    updatePortamentoTime(validPortamentoTime);
-                    addLog(`Portamento time updated to ${validPortamentoTime}s by controller`);
-                    break;
-                  default:
-                    addLog(`Unknown synth parameter: ${message.param}`);
-                }
-                return;
-              }
-            } catch (error) {
-              console.error("Error parsing JSON message:", error);
-              // Continue with non-JSON message handling
-            }
-          }
-
-          // Regular message
-          addLog(`Received: ${event.data}`);
-        };
+        
+        // Setup the received channel with our unified handlers
+        setupDataChannel(receivedChannel, "ALT");
       };
 
       console.log("Setting remote description from offer");
@@ -1222,20 +796,24 @@ export default function WebRTC() {
     if (!dataChannel.value || dataChannel.value.readyState !== "open") {
       return;
     }
-
-    try {
-      dataChannel.value.send(JSON.stringify({
-        type: "audio_state",
-        isMuted: isMuted.value,
-        audioState: audioState.value,
-      }));
-      console.log(
-        "Sent audio state update:",
-        isMuted.value ? "muted" : "unmuted",
-        audioState.value,
-      );
-    } catch (error) {
-      console.error("Error sending audio state:", error);
+    
+    if (isMuted.value) {
+      sendAudioStateOnly(dataChannel.value);
+    } else {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "audio_state",
+          isMuted: isMuted.value,
+          audioState: audioState.value,
+        }));
+        console.log(
+          "Sent audio state update:",
+          isMuted.value ? "muted" : "unmuted",
+          audioState.value,
+        );
+      } catch (error) {
+        console.error("Error sending audio state:", error);
+      }
     }
   };
 
