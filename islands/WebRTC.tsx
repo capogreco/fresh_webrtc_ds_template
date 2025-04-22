@@ -79,6 +79,21 @@ export default function WebRTC() {
     }, 0);
   };
   
+  // Generic parameter update utility
+  interface AudioParamUpdateOptions<T> {
+    // Required parameters
+    signal: Signal<T>;                    // Signal storing the parameter value
+    paramName: string;                    // Parameter name for logging and sending
+    newValue: T;                          // New value to set
+    
+    // Optional parameters
+    audioNode?: AudioParam | null;        // Web Audio node parameter to update (if applicable)
+    formatValue?: (value: T) => string;   // Function to format value for display
+    unit?: string;                        // Unit of measurement for logging
+    extraUpdates?: (value: T) => void;    // Additional updates to perform
+    skipSendToController?: boolean;       // Skip sending to controller
+  }
+
   // Utility for sending a parameter update to controller
   const sendParamToController = (param: string, value: any) => {
     if (dataChannel.value && dataChannel.value.readyState === "open") {
@@ -92,6 +107,44 @@ export default function WebRTC() {
         console.error(`Error sending ${param} update:`, error);
       }
     }
+  };
+  
+  // Generic parameter update function
+  const updateAudioParam = <T>({
+    signal,
+    paramName,
+    newValue,
+    audioNode = null,
+    formatValue = String,
+    unit = "",
+    extraUpdates = null,
+    skipSendToController = false
+  }: AudioParamUpdateOptions<T>) => {
+    // Update the signal value
+    signal.value = newValue;
+    
+    // Update the audio node if provided and audioContext exists
+    if (audioNode && audioContext) {
+      const now = audioContext.currentTime;
+      audioNode.setValueAtTime(newValue as number, now);
+    }
+    
+    // Perform any extra updates
+    if (extraUpdates) {
+      extraUpdates(newValue);
+    }
+    
+    // Log the change
+    const formattedValue = formatValue(newValue);
+    const unitString = unit ? ` ${unit}` : "";
+    addLog(`${paramName} updated to ${formattedValue}${unitString}`);
+    
+    // Send to controller if connected and not skipped
+    if (!skipSendToController) {
+      sendParamToController(paramName.toLowerCase(), newValue);
+    }
+    
+    return newValue;
   };
   
   // Utility for sending all synth parameters to controller
@@ -1025,43 +1078,28 @@ export default function WebRTC() {
   // Update oscillator waveform
   const updateWaveform = (newWaveform: OscillatorType) => {
     if (oscillator) {
+      // Need to update oscillator type directly since it's not an AudioParam
       oscillator.type = newWaveform;
-      waveform.value = newWaveform;
-      addLog(`Waveform changed to ${newWaveform}`);
-
-      // Send waveform update to controller if connected
-      if (dataChannel.value && dataChannel.value.readyState === "open") {
-        try {
-          dataChannel.value.send(JSON.stringify({
-            type: "synth_param",
-            param: "waveform",
-            value: newWaveform,
-          }));
-        } catch (error) {
-          console.error("Error sending waveform update:", error);
-        }
-      }
+      
+      // Use the generic update function for the rest
+      updateAudioParam({
+        signal: waveform,
+        paramName: "Waveform",
+        newValue: newWaveform
+      });
     }
   };
 
   // Update volume
   const updateVolume = (newVolume: number) => {
     if (gainNode) {
-      gainNode.gain.value = newVolume;
-      volume.value = newVolume;
-
-      // Send volume update to controller if connected
-      if (dataChannel.value && dataChannel.value.readyState === "open") {
-        try {
-          dataChannel.value.send(JSON.stringify({
-            type: "synth_param",
-            param: "volume",
-            value: newVolume,
-          }));
-        } catch (error) {
-          console.error("Error sending volume update:", error);
-        }
-      }
+      updateAudioParam({
+        signal: volume,
+        paramName: "Volume",
+        newValue: newVolume,
+        audioNode: gainNode.gain,
+        formatValue: (val) => `${Math.round(val * 100)}%`
+      });
     }
   };
 
@@ -1083,128 +1121,104 @@ export default function WebRTC() {
 
   // Update detune value
   const updateDetune = (cents: number) => {
-    detune.value = cents;
-
-    // Update oscillator if it exists
-    if (oscillator && audioContext) {
-      oscillator.detune.setValueAtTime(cents, audioContext.currentTime);
-      addLog(`Detune set to ${cents} cents`);
-    }
-
-    // Send detune update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "detune",
-          value: cents,
-        }));
-      } catch (error) {
-        console.error("Error sending detune update:", error);
-      }
+    if (oscillator) {
+      updateAudioParam({
+        signal: detune,
+        paramName: "Detune",
+        newValue: cents,
+        audioNode: oscillator?.detune || null,
+        unit: "cents",
+        formatValue: (val) => val > 0 ? `+${val}` : String(val)
+      });
+    } else {
+      // Just update the signal if no oscillator exists
+      updateAudioParam({
+        signal: detune,
+        paramName: "Detune",
+        newValue: cents,
+        unit: "cents",
+        formatValue: (val) => val > 0 ? `+${val}` : String(val)
+      });
     }
   };
   
   // Update attack time
   const updateAttack = (attackTime: number) => {
-    attack.value = attackTime;
-    
-    // Implementation will be applied when oscillator is restarted
-    addLog(`Attack time set to ${attackTime}s`);
-    
-    // Send attack update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "attack",
-          value: attackTime,
-        }));
-      } catch (error) {
-        console.error("Error sending attack update:", error);
-      }
-    }
+    // No audioNode for attack as it's applied when oscillator is restarted
+    updateAudioParam({
+      signal: attack,
+      paramName: "Attack",
+      newValue: attackTime,
+      unit: "s",
+      formatValue: (val) => val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`
+    });
   };
   
   // Update release time
   const updateRelease = (releaseTime: number) => {
-    release.value = releaseTime;
-    
-    // Implementation will be applied when oscillator is released
-    addLog(`Release time set to ${releaseTime}s`);
-    
-    // Send release update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "release",
-          value: releaseTime,
-        }));
-      } catch (error) {
-        console.error("Error sending release update:", error);
-      }
-    }
+    // No audioNode for release as it's applied when oscillator is released
+    updateAudioParam({
+      signal: release,
+      paramName: "Release",
+      newValue: releaseTime,
+      unit: "s",
+      formatValue: (val) => val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`
+    });
   };
   
   // Update filter cutoff
   const updateFilterCutoff = (cutoffFreq: number) => {
-    filterCutoff.value = cutoffFreq;
-    
-    // Update filter if it exists
-    if (filterNode && audioContext) {
-      filterNode.frequency.setValueAtTime(cutoffFreq, audioContext.currentTime);
-      addLog(`Filter cutoff set to ${cutoffFreq}Hz`);
-    }
-    
-    // Send filter cutoff update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "filterCutoff",
-          value: cutoffFreq,
-        }));
-      } catch (error) {
-        console.error("Error sending filter cutoff update:", error);
-      }
+    if (filterNode) {
+      updateAudioParam({
+        signal: filterCutoff,
+        paramName: "Filter cutoff",
+        newValue: cutoffFreq,
+        audioNode: filterNode.frequency,
+        unit: "Hz",
+        formatValue: (val) => val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`
+      });
+    } else {
+      // Just update the signal if no filter exists
+      updateAudioParam({
+        signal: filterCutoff,
+        paramName: "Filter cutoff",
+        newValue: cutoffFreq,
+        unit: "Hz",
+        formatValue: (val) => val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`
+      });
     }
   };
   
   // Update filter resonance
   const updateFilterResonance = (resonance: number) => {
-    filterResonance.value = resonance;
-    
-    // Update filter if it exists
-    if (filterNode && audioContext) {
-      filterNode.Q.setValueAtTime(resonance, audioContext.currentTime);
-      addLog(`Filter resonance set to ${resonance}`);
-    }
-    
-    // Send filter resonance update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "filterResonance",
-          value: resonance,
-        }));
-      } catch (error) {
-        console.error("Error sending filter resonance update:", error);
-      }
+    if (filterNode) {
+      updateAudioParam({
+        signal: filterResonance,
+        paramName: "Filter resonance",
+        newValue: resonance,
+        audioNode: filterNode.Q,
+        formatValue: (val) => val.toFixed(1)
+      });
+    } else {
+      // Just update the signal if no filter exists
+      updateAudioParam({
+        signal: filterResonance,
+        paramName: "Filter resonance",
+        newValue: resonance,
+        formatValue: (val) => val.toFixed(1)
+      });
     }
   };
   
   // Update vibrato rate
   const updateVibratoRate = (rate: number) => {
-    vibratoRate.value = rate;
-    
-    // Update vibrato oscillator if it exists
-    if (vibratoOsc && audioContext) {
+    // Special processing is needed for vibrato rate
+    const vibratoRateUpdates = (rate: number) => {
+      if (!vibratoOsc || !audioContext) return;
+      
       const now = audioContext.currentTime;
       
       // If rate is 0, effectively disable vibrato by setting the LFO to 0Hz
-      // (This won't actually make it 0Hz due to Web Audio limitations, but it'll be very slow)
       if (rate === 0) {
         // Set to very low value (0.001Hz = one cycle per ~17 minutes)
         vibratoOsc.frequency.setValueAtTime(0.001, now);
@@ -1214,7 +1228,7 @@ export default function WebRTC() {
           vibratoGain.gain.setValueAtTime(0, now);
         }
         
-        addLog("Vibrato disabled (rate set to 0)");
+        console.log("Vibrato disabled (rate set to 0)");
       } else {
         // Normal rate update
         vibratoOsc.frequency.setValueAtTime(rate, now);
@@ -1229,89 +1243,62 @@ export default function WebRTC() {
           vibratoGain.gain.setValueAtTime(vibratoAmount, now);
           console.log(`Vibrato re-enabled with rate ${rate}Hz and amount ${vibratoAmount}Hz`);
         }
-        
-        addLog(`Vibrato rate set to ${rate}Hz`);
       }
-    }
+    };
     
-    // Send vibrato rate update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "vibratoRate",
-          value: rate,
-        }));
-      } catch (error) {
-        console.error("Error sending vibrato rate update:", error);
-      }
-    }
+    // Use the generic update function with custom processing
+    updateAudioParam({
+      signal: vibratoRate,
+      paramName: "Vibrato rate",
+      newValue: rate,
+      unit: "Hz",
+      extraUpdates: vibratoRateUpdates,
+      formatValue: (val) => val === 0 ? "off" : val.toFixed(1)
+    });
   };
   
   // Update vibrato width
   const updateVibratoWidth = (width: number) => {
-    vibratoWidth.value = width;
-    
-    // Update vibrato gain if it exists
-    if (vibratoGain && audioContext && oscillator) {
-      // Calculate the proper vibrato amount based on semitone ratio and current frequency
-      // Convert width from cents to a multiplier (100 cents = 1 semitone)
-      const semitoneRatio = Math.pow(2, 1/12); // Semitone ratio
+    // Special processing is needed for vibrato width
+    const vibratoWidthUpdates = (width: number) => {
+      if (!vibratoGain || !audioContext || !oscillator) return;
       
-      // Calculate how much of a semitone we want for vibrato
+      // Calculate vibrato amount based on semitone ratio and current frequency
+      const semitoneRatio = Math.pow(2, 1/12);
       const semitoneAmount = width / 100;
-      
-      // For vibrato, we need the deviation around the base frequency
-      // The amount needs to be current frequency * how much the frequency changes per semitone * fraction of semitone
       const currentFreq = oscillator.frequency.value;
-      
-      // Calculate proper vibrato amplitude
-      // This creates a deviation of +/- (width cents) around the fundamental frequency
       const vibratoAmount = currentFreq * (Math.pow(semitoneRatio, semitoneAmount/2) - 1);
       
       vibratoGain.gain.setValueAtTime(vibratoAmount, audioContext.currentTime);
       console.log(`Vibrato width set to ${width} cents (amount: ${vibratoAmount}Hz around ${currentFreq}Hz)`);
-      addLog(`Vibrato width set to ${width} cents`);
       
       // When width is 0, disable vibrato completely by setting gain to 0
       if (width === 0 && vibratoOsc) {
         vibratoGain.gain.setValueAtTime(0, audioContext.currentTime);
       }
-    }
+    };
     
-    // Send vibrato width update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "vibratoWidth",
-          value: width,
-        }));
-      } catch (error) {
-        console.error("Error sending vibrato width update:", error);
-      }
-    }
+    // Use the generic update function with custom processing
+    updateAudioParam({
+      signal: vibratoWidth,
+      paramName: "Vibrato width",
+      newValue: width,
+      unit: "cents",
+      extraUpdates: vibratoWidthUpdates,
+      formatValue: (val) => val === 0 ? "off" : val.toString()
+    });
   };
   
   // Update portamento time
   const updatePortamentoTime = (time: number) => {
-    portamentoTime.value = time;
-    
-    // Implementation will be applied when frequency changes
-    addLog(`Portamento time set to ${time}s`);
-    
-    // Send portamento time update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "portamentoTime",
-          value: time,
-        }));
-      } catch (error) {
-        console.error("Error sending portamento time update:", error);
-      }
-    }
+    // Use the generic update function
+    updateAudioParam({
+      signal: portamentoTime,
+      paramName: "Portamento time",
+      newValue: time,
+      unit: "s",
+      formatValue: (val) => val === 0 ? "off" : val.toFixed(2)
+    });
   };
 
   // Toggle oscillator on/off
