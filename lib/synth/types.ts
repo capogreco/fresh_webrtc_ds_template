@@ -74,7 +74,7 @@ export type SynthMessageType =
 export interface SynthParamMessage {
   type: "synth_param";
   param: keyof SynthParams;
-  value: any;
+  value: string | number | boolean;
 }
 
 /**

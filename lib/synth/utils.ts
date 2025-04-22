@@ -1,4 +1,4 @@
-import { SynthParams } from "./types.ts";
+import { OscillatorType, SynthParams } from "./types.ts";
 import {
   CONCERT_A4,
   MAX_ATTACK,
@@ -27,51 +27,77 @@ import {
 import { DEFAULT_SYNTH_PARAMS } from "./defaults.ts";
 
 /**
- * Validate and clamp frequency to acceptable range
+ * Parameter validation configuration
  */
-export function validateFrequency(frequency: number): number {
-  // Ensure frequency is a number
-  if (typeof frequency !== "number" || isNaN(frequency)) {
-    console.warn(`Invalid frequency value: ${frequency}, using default`);
-    return DEFAULT_SYNTH_PARAMS.frequency;
+interface RangeValidationConfig {
+  paramName: string;
+  min: number;
+  max: number;
+  defaultValue: number;
+}
+
+/**
+ * Generic number validator function type
+ */
+type NumberValidator = (value: number | unknown) => number;
+
+/**
+ * Generic validator for numerical parameters with range constraints
+ */
+function validateRange(
+  value: number | unknown,
+  config: RangeValidationConfig,
+): number {
+  // Ensure value is a number
+  if (typeof value !== "number" || isNaN(value)) {
+    console.warn(`Invalid ${config.paramName} value: ${value}, using default`);
+    return config.defaultValue;
   }
 
   // Clamp to acceptable range
-  return Math.max(MIN_FREQUENCY, Math.min(MAX_FREQUENCY, frequency));
+  return Math.max(config.min, Math.min(config.max, value));
 }
+
+/**
+ * Validate and clamp frequency to acceptable range
+ */
+export const validateFrequency: NumberValidator = (frequency) => {
+  return validateRange(frequency, {
+    paramName: "frequency",
+    min: MIN_FREQUENCY,
+    max: MAX_FREQUENCY,
+    defaultValue: DEFAULT_SYNTH_PARAMS.frequency,
+  });
+};
 
 /**
  * Validate and clamp volume to acceptable range
  */
-export function validateVolume(volume: number): number {
-  // Ensure volume is a number
-  if (typeof volume !== "number" || isNaN(volume)) {
-    console.warn(`Invalid volume value: ${volume}, using default`);
-    return DEFAULT_SYNTH_PARAMS.volume;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_VOLUME, Math.min(MAX_VOLUME, volume));
-}
+export const validateVolume: NumberValidator = (volume) => {
+  return validateRange(volume, {
+    paramName: "volume",
+    min: MIN_VOLUME,
+    max: MAX_VOLUME,
+    defaultValue: DEFAULT_SYNTH_PARAMS.volume,
+  });
+};
 
 /**
  * Validate and clamp detune to acceptable range
  */
-export function validateDetune(detune: number): number {
-  // Ensure detune is a number
-  if (typeof detune !== "number" || isNaN(detune)) {
-    console.warn(`Invalid detune value: ${detune}, using default`);
-    return DEFAULT_SYNTH_PARAMS.detune;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_DETUNE, Math.min(MAX_DETUNE, detune));
-}
+export const validateDetune: NumberValidator = (detune) => {
+  return validateRange(detune, {
+    paramName: "detune",
+    min: MIN_DETUNE,
+    max: MAX_DETUNE,
+    defaultValue: DEFAULT_SYNTH_PARAMS.detune,
+  });
+};
 
 /**
  * Validate oscillator type
  */
-export function validateWaveform(waveform: any): OscillatorType {
+export function validateWaveform(waveform: string | unknown): OscillatorType {
   // Valid oscillator types
   const validTypes = ["sine", "square", "sawtooth", "triangle"];
 
@@ -88,103 +114,86 @@ export function validateWaveform(waveform: any): OscillatorType {
 /**
  * Validate and clamp attack time
  */
-export function validateAttack(attack: number): number {
-  // Ensure attack is a number
-  if (typeof attack !== "number" || isNaN(attack)) {
-    console.warn(`Invalid attack value: ${attack}, using default`);
-    return DEFAULT_SYNTH_PARAMS.attack;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_ATTACK, Math.min(MAX_ATTACK, attack));
-}
+export const validateAttack: NumberValidator = (attack) => {
+  return validateRange(attack, {
+    paramName: "attack",
+    min: MIN_ATTACK,
+    max: MAX_ATTACK,
+    defaultValue: DEFAULT_SYNTH_PARAMS.attack,
+  });
+};
 
 /**
  * Validate and clamp release time
  */
-export function validateRelease(release: number): number {
-  // Ensure release is a number
-  if (typeof release !== "number" || isNaN(release)) {
-    console.warn(`Invalid release value: ${release}, using default`);
-    return DEFAULT_SYNTH_PARAMS.release;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_RELEASE, Math.min(MAX_RELEASE, release));
-}
+export const validateRelease: NumberValidator = (release) => {
+  return validateRange(release, {
+    paramName: "release",
+    min: MIN_RELEASE,
+    max: MAX_RELEASE,
+    defaultValue: DEFAULT_SYNTH_PARAMS.release,
+  });
+};
 
 /**
  * Validate and clamp filter cutoff
  */
-export function validateFilterCutoff(cutoff: number): number {
-  // Ensure cutoff is a number
-  if (typeof cutoff !== "number" || isNaN(cutoff)) {
-    console.warn(`Invalid filter cutoff value: ${cutoff}, using default`);
-    return DEFAULT_SYNTH_PARAMS.filterCutoff;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_FILTER_CUTOFF, Math.min(MAX_FILTER_CUTOFF, cutoff));
-}
+export const validateFilterCutoff: NumberValidator = (cutoff) => {
+  return validateRange(cutoff, {
+    paramName: "filter cutoff",
+    min: MIN_FILTER_CUTOFF,
+    max: MAX_FILTER_CUTOFF,
+    defaultValue: DEFAULT_SYNTH_PARAMS.filterCutoff,
+  });
+};
 
 /**
  * Validate and clamp filter resonance
  */
-export function validateFilterResonance(resonance: number): number {
-  // Ensure resonance is a number
-  if (typeof resonance !== "number" || isNaN(resonance)) {
-    console.warn(`Invalid filter resonance value: ${resonance}, using default`);
-    return DEFAULT_SYNTH_PARAMS.filterResonance;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(
-    MIN_FILTER_RESONANCE,
-    Math.min(MAX_FILTER_RESONANCE, resonance),
-  );
-}
+export const validateFilterResonance: NumberValidator = (resonance) => {
+  return validateRange(resonance, {
+    paramName: "filter resonance",
+    min: MIN_FILTER_RESONANCE,
+    max: MAX_FILTER_RESONANCE,
+    defaultValue: DEFAULT_SYNTH_PARAMS.filterResonance,
+  });
+};
 
 /**
  * Validate and clamp vibrato rate
  */
-export function validateVibratoRate(rate: number): number {
-  // Ensure rate is a number
-  if (typeof rate !== "number" || isNaN(rate)) {
-    console.warn(`Invalid vibrato rate value: ${rate}, using default`);
-    return DEFAULT_SYNTH_PARAMS.vibratoRate;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_VIBRATO_RATE, Math.min(MAX_VIBRATO_RATE, rate));
-}
+export const validateVibratoRate: NumberValidator = (rate) => {
+  return validateRange(rate, {
+    paramName: "vibrato rate",
+    min: MIN_VIBRATO_RATE,
+    max: MAX_VIBRATO_RATE,
+    defaultValue: DEFAULT_SYNTH_PARAMS.vibratoRate,
+  });
+};
 
 /**
  * Validate and clamp vibrato width
  */
-export function validateVibratoWidth(width: number): number {
-  // Ensure width is a number
-  if (typeof width !== "number" || isNaN(width)) {
-    console.warn(`Invalid vibrato width value: ${width}, using default`);
-    return DEFAULT_SYNTH_PARAMS.vibratoWidth;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_VIBRATO_WIDTH, Math.min(MAX_VIBRATO_WIDTH, width));
-}
+export const validateVibratoWidth: NumberValidator = (width) => {
+  return validateRange(width, {
+    paramName: "vibrato width",
+    min: MIN_VIBRATO_WIDTH,
+    max: MAX_VIBRATO_WIDTH,
+    defaultValue: DEFAULT_SYNTH_PARAMS.vibratoWidth,
+  });
+};
 
 /**
  * Validate and clamp portamento time
  */
-export function validatePortamentoTime(time: number): number {
-  // Ensure time is a number
-  if (typeof time !== "number" || isNaN(time)) {
-    console.warn(`Invalid portamento time value: ${time}, using default`);
-    return DEFAULT_SYNTH_PARAMS.portamentoTime;
-  }
-
-  // Clamp to acceptable range
-  return Math.max(MIN_PORTAMENTO_TIME, Math.min(MAX_PORTAMENTO_TIME, time));
-}
+export const validatePortamentoTime: NumberValidator = (time) => {
+  return validateRange(time, {
+    paramName: "portamento time",
+    min: MIN_PORTAMENTO_TIME,
+    max: MAX_PORTAMENTO_TIME,
+    defaultValue: DEFAULT_SYNTH_PARAMS.portamentoTime,
+  });
+};
 
 /**
  * Convert a musical note name to frequency in Hz
@@ -219,6 +228,29 @@ export function frequencyToNote(frequency: number): string {
 }
 
 /**
+ * Type for the validator map functions
+ */
+type ValidatorFn = (value: unknown) => unknown;
+
+/**
+ * Map of parameter keys to their validation functions
+ */
+const validatorMap: Record<keyof SynthParams, ValidatorFn> = {
+  frequency: validateFrequency,
+  volume: validateVolume,
+  detune: validateDetune,
+  waveform: validateWaveform,
+  oscillatorEnabled: (value: unknown) => Boolean(value),
+  attack: validateAttack,
+  release: validateRelease,
+  filterCutoff: validateFilterCutoff,
+  filterResonance: validateFilterResonance,
+  vibratoRate: validateVibratoRate,
+  vibratoWidth: validateVibratoWidth,
+  portamentoTime: validatePortamentoTime,
+};
+
+/**
  * Apply and validate all synth parameters at once
  */
 export function validateSynthParams(params: Partial<SynthParams>): SynthParams {
@@ -226,55 +258,14 @@ export function validateSynthParams(params: Partial<SynthParams>): SynthParams {
   const validParams = { ...DEFAULT_SYNTH_PARAMS };
 
   // Apply and validate each parameter if provided
-  if (params.frequency !== undefined) {
-    validParams.frequency = validateFrequency(params.frequency);
-  }
-
-  if (params.volume !== undefined) {
-    validParams.volume = validateVolume(params.volume);
-  }
-
-  if (params.detune !== undefined) {
-    validParams.detune = validateDetune(params.detune);
-  }
-
-  if (params.waveform !== undefined) {
-    validParams.waveform = validateWaveform(params.waveform);
-  }
-
-  if (params.oscillatorEnabled !== undefined) {
-    validParams.oscillatorEnabled = Boolean(params.oscillatorEnabled);
-  }
-
-  // New parameters
-  if (params.attack !== undefined) {
-    validParams.attack = validateAttack(params.attack);
-  }
-
-  if (params.release !== undefined) {
-    validParams.release = validateRelease(params.release);
-  }
-
-  if (params.filterCutoff !== undefined) {
-    validParams.filterCutoff = validateFilterCutoff(params.filterCutoff);
-  }
-
-  if (params.filterResonance !== undefined) {
-    validParams.filterResonance = validateFilterResonance(
-      params.filterResonance,
-    );
-  }
-
-  if (params.vibratoRate !== undefined) {
-    validParams.vibratoRate = validateVibratoRate(params.vibratoRate);
-  }
-
-  if (params.vibratoWidth !== undefined) {
-    validParams.vibratoWidth = validateVibratoWidth(params.vibratoWidth);
-  }
-
-  if (params.portamentoTime !== undefined) {
-    validParams.portamentoTime = validatePortamentoTime(params.portamentoTime);
+  for (const [key, value] of Object.entries(params)) {
+    const paramKey = key as keyof SynthParams;
+    if (value !== undefined && validatorMap[paramKey]) {
+      const validValue = validatorMap[paramKey](value);
+      // This type assertion is safe because we're using the appropriate validators
+      // mapped to their respective parameter types
+      (validParams[paramKey] as unknown) = validValue;
+    }
   }
 
   return validParams;

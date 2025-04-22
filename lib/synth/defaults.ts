@@ -5,7 +5,6 @@ import {
   MIN_ATTACK,
   MIN_FILTER_RESONANCE,
   MIN_PORTAMENTO_TIME,
-  MIN_RELEASE,
   MIN_VIBRATO_RATE,
   MIN_VIBRATO_WIDTH,
 } from "./constants.ts";
