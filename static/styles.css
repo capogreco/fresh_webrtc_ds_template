@@ -413,7 +413,6 @@ button:disabled {
 
 .latency-indicator {
   font-size: 12px;
-  color: #fbd38d; /* Brighter amber color for better visibility */
   font-family: ui-monospace, monospace;
   min-width: 80px; /* Ensure space is reserved */
   display: inline-block;
@@ -422,6 +421,17 @@ button:disabled {
   background-color: rgba(0, 0, 0, 0.2);
   border-radius: 4px;
   cursor: pointer;
+  color: #48bb78; /* Default fresh latency values in green */
+}
+
+/* Stale latency values shown in yellow */
+.latency-stale {
+  color: #fbd38d; /* Yellow for stale values */
+}
+
+.latency-measuring {
+  color: #a0aec0; /* Gray for measuring state */
+  font-style: italic;
 }
 
 .latency-indicator:hover {

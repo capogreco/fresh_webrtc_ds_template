@@ -1180,8 +1180,8 @@ export default function Controller({ user }: ControllerProps) {
       connection.dataChannel.send(testMessage);
       addLog(`Sent test message to client ${clientId}: ${testMessage}`);
 
-      // Set a fixed latency value for testing
-      updateClientLatency(clientId, Math.floor(Math.random() * 100) + 10);
+      // Set a latency value for testing - not stale since this is a synthetic test
+      updateClientLatency(clientId, Math.floor(Math.random() * 100) + 10, false);
     } catch (error) {
       console.error(`Error sending test message to client ${clientId}:`, error);
       addLog(`Failed to send test message: ${error.message}`);
@@ -1202,7 +1202,8 @@ export default function Controller({ user }: ControllerProps) {
     }
 
     const connection = connections.value.get(clientId);
-
+    const client = clients.value.get(clientId);
+    
     // Create ping with current timestamp
     const timestamp = Date.now();
     pingTimestamps.set(clientId, timestamp);
@@ -1218,9 +1219,9 @@ export default function Controller({ user }: ControllerProps) {
       );
 
       // Update the client UI to show we're measuring
-      updateClientLatency(clientId, -1);
+      updateClientLatency(clientId, -1, false);
 
-      // Set a timeout to show a fallback value if no response within 2 seconds
+      // Set a timeout to mark latency as stale if no response within 2 seconds
       setTimeout(() => {
         if (pingTimestamps.has(clientId)) {
           console.log(
@@ -1228,8 +1229,20 @@ export default function Controller({ user }: ControllerProps) {
           );
           pingTimestamps.delete(clientId);
 
-          // Set a fixed latency value since we didn't get a real measurement
-          updateClientLatency(clientId, 555);
+          // Keep the previous latency value but mark it as stale
+          const currentClient = clients.value.get(clientId);
+          if (currentClient) {
+            const latency = currentClient.latency || 0;
+            // Only update if we have a valid previous latency
+            if (latency > 0) {
+              updateClientLatency(clientId, latency, true); // Mark as stale
+              addLog(`Client ${clientId} ping timed out - connection may be unstable`);
+            } else {
+              // If we don't have a valid previous value, use a placeholder
+              updateClientLatency(clientId, 100, true);
+              addLog(`Client ${clientId} ping timed out - using placeholder latency`);
+            }
+          }
         }
       }, 2000);
     } catch (error) {
@@ -1610,8 +1623,10 @@ export default function Controller({ user }: ControllerProps) {
             `[CONTROLLER] Couldn't extract timestamp from: ${message}`,
           );
 
-          // Even if we can't extract a timestamp, set a default latency to show something
-          updateClientLatency(clientId, 999); // Placeholder value
+          // Even if we can't extract a timestamp, use current latency but mark as stale
+          const client = clients.value.get(clientId);
+          const currentLatency = client?.latency || 100;
+          updateClientLatency(clientId, currentLatency, true); // Mark as stale
           return;
         }
 
@@ -1650,8 +1665,8 @@ export default function Controller({ user }: ControllerProps) {
           }
         }
 
-        // Update the client's latency display
-        updateClientLatency(clientId, latency);
+        // Update the client's latency display - not stale since we received a response
+        updateClientLatency(clientId, latency, false);
         return;
       }
 
@@ -1660,13 +1675,15 @@ export default function Controller({ user }: ControllerProps) {
     } catch (error) {
       console.error(`[CONTROLLER] Error handling message: ${error.message}`);
 
-      // Even if error, try to update latency with a placeholder value
-      updateClientLatency(clientId, 888);
+      // Even if error, maintain current latency but mark as stale
+      const client = clients.value.get(clientId);
+      const currentLatency = client?.latency || 100;
+      updateClientLatency(clientId, currentLatency, true);
     }
   };
 
   // Helper function to update client latency
-  const updateClientLatency = (clientId: string, latency: number) => {
+  const updateClientLatency = (clientId: string, latency: number, stale: boolean = false) => {
     // Create a new Map to maintain reactivity
     const newClients = new Map(clients.value);
     const client = newClients.get(clientId);
@@ -1676,6 +1693,7 @@ export default function Controller({ user }: ControllerProps) {
       const updatedClient = {
         ...client,
         latency,
+        staleLatency: stale,
         lastSeen: Date.now(),
       };
 
@@ -1685,13 +1703,13 @@ export default function Controller({ user }: ControllerProps) {
       // Update the signal with the new Map
       clients.value = newClients;
 
-      console.log(`[CONTROLLER] Updated ${clientId} with latency=${latency}ms`);
+      console.log(`[CONTROLLER] Updated ${clientId} with latency=${latency}ms (stale=${stale})`);
 
       // Force a re-render by triggering another update after a tiny delay if needed
       // This ensures the UI always reflects the latest latency
       setTimeout(() => {
         const latestClient = clients.value.get(clientId);
-        if (latestClient?.latency !== latency) {
+        if (latestClient?.latency !== latency || latestClient?.staleLatency !== stale) {
           console.log(`[CONTROLLER] Forcing latency update for ${clientId}`);
           clients.value = new Map(clients.value);
         }
@@ -1699,7 +1717,7 @@ export default function Controller({ user }: ControllerProps) {
     } else {
       // If client doesn't exist, create a new entry
       console.log(
-        `[CONTROLLER] Adding new client ${clientId} with latency=${latency}ms`,
+        `[CONTROLLER] Adding new client ${clientId} with latency=${latency}ms (stale=${stale})`,
       );
 
       // Create the new client
@@ -1709,6 +1727,7 @@ export default function Controller({ user }: ControllerProps) {
             connections.value.get(clientId)?.connected || false,
         lastSeen: Date.now(),
         latency,
+        staleLatency: stale,
         synthParams: { ...DEFAULT_SYNTH_PARAMS }, // Initialize with default synth parameters
       };
 
@@ -2248,8 +2267,10 @@ export default function Controller({ user }: ControllerProps) {
                           {connections.value.has(client.id) &&
                               connections.value.get(client.id)?.connected
                             ? (client.latency === -1
-                              ? "measuring..."
-                              : `${client.latency || 0}ms`) // Show actual value, defaulting to 0ms
+                              ? <span className="latency-measuring">measuring...</span>
+                              : <span className={client.staleLatency ? "latency-stale" : ""}>
+                                  {client.latency || 0}ms
+                                </span>)
                             : ""}
                         </span>
 

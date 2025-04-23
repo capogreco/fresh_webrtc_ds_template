@@ -13,6 +13,8 @@ export interface SynthClient {
   lastSeen: number;
   /** Latency in milliseconds between controller and client */
   latency?: number;
+  /** Whether the latency value is stale (ping failed but keeping previous value) */
+  staleLatency?: boolean;
   /** Synthesizer parameters for audio configuration */
   synthParams?: SynthParams;
   /** Whether audio is muted on the client */
