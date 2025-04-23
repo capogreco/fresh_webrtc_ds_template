@@ -1,6 +1,7 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
 import { OAuth2Client } from "https://deno.land/x/oauth2_client@v1.0.2/mod.ts";
 import Controller from "../../islands/Controller.tsx";
+import KickControllerButton from "../../islands/KickControllerButton.tsx";
 
 // OAuth configuration
 // Manually construct Google OAuth URL function to avoid stringify issues
@@ -80,8 +81,8 @@ try {
   console.error("Error opening KV store:", error);
 }
 
-const CONTROLLER_LOCK_KEY = ["webrtc:controller:lock"];
-const CONTROLLER_LOCK_TTL_MS = 1000 * 60 * 5; // 5 minutes TTL for controller lock
+// Key for storing the active controller client ID
+const ACTIVE_CTRL_CLIENT_ID = ["webrtc:active_ctrl_client"];
 
 // Helper to get a cookie value
 function getCookieValue(cookieStr: string, name: string): string | null {
@@ -92,6 +93,11 @@ function getCookieValue(cookieStr: string, name: string): string | null {
 export const handler: Handlers = {
   async GET(req, ctx) {
     try {
+      // Check URL for special parameters from kick controller redirect
+      const url = new URL(req.url);
+      const forceActive = url.searchParams.get("active") === "true";
+      const forcedClientId = url.searchParams.get("clientId");
+
       // Check if this is a production deployment without env vars set
       const isProdWithoutEnvVars = !Deno.env.get("GOOGLE_CLIENT_ID") &&
         req.url.includes("deno.dev");
@@ -198,14 +204,28 @@ export const handler: Handlers = {
         }, { headers });
       }
 
-      // Check if controller is already locked
-      let controllerLock;
+      // Generate a unique client ID for this controller session or use the forced one from kick
+      const clientId = forcedClientId || `controller-${crypto.randomUUID().substring(0, 8)}`;
+      
+      // Check if there's an active controller
+      let activeControllerClientId;
       try {
-        controllerLock = await kv.get(CONTROLLER_LOCK_KEY);
+        activeControllerClientId = await kv.get(ACTIVE_CTRL_CLIENT_ID);
       } catch (error) {
-        console.error("Error checking controller lock:", error);
-        // If it's a quota error, just proceed with no lock
-        controllerLock = { value: null };
+        console.error("Error checking active controller:", error);
+        // If it's a quota error, just proceed with no active controller
+        activeControllerClientId = { value: null };
+      }
+      
+      // If this is a force active request and we have a matching client ID, update active controller
+      if (forceActive && forcedClientId && forcedClientId === clientId) {
+        console.log(`Force activating controller with client ID: ${clientId}`);
+        try {
+          await kv.set(ACTIVE_CTRL_CLIENT_ID, clientId);
+          activeControllerClientId = { value: clientId };
+        } catch (error) {
+          console.error("Error forcing controller activation:", error);
+        }
       }
 
       // Data to pass to the page
@@ -214,8 +234,10 @@ export const handler: Handlers = {
           ...sessionData.value,
           id: sessionId, // Add the ID field for the client code
         },
-        isControllerActive: !!controllerLock.value,
-        controllerId: controllerLock.value?.userId || null,
+        clientId, // Pass the generated client ID to the page
+        isControllerActive: !!activeControllerClientId.value,
+        isCurrentClient: activeControllerClientId.value === clientId,
+        activeControllerClientId: activeControllerClientId.value || null,
       };
 
       return ctx.render(data);
@@ -359,7 +381,7 @@ export default function ControllerPage({ data }: PageProps) {
     );
   }
 
-  const { user, isControllerActive, controllerId } = data;
+  const { user, clientId, isControllerActive, isCurrentClient, activeControllerClientId } = data;
 
   // Make sure user object exists
   if (!user || typeof user !== "object") {
@@ -380,17 +402,24 @@ export default function ControllerPage({ data }: PageProps) {
     );
   }
 
-  if (isControllerActive && controllerId !== user.id) {
+  // If a controller is active and it's not this client
+  if (isControllerActive && !isCurrentClient) {
     return (
       <div class="container">
         <h1>Controller Already Active</h1>
         <p>
-          Another user is currently controlling the system. Please try again
-          later.
+          Another controller client is already active.
         </p>
+        <div style="margin-top: 20px;">
+          <KickControllerButton 
+            user={user} 
+            clientId={clientId} 
+            activeControllerClientId={activeControllerClientId} 
+          />
+        </div>
       </div>
     );
   }
 
-  return <Controller user={user} />;
+  return <Controller user={user} clientId={clientId} />;
 }

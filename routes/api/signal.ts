@@ -9,21 +9,21 @@ const MESSAGE_TTL_MS = 1000 * 60 * 5;
 
 // Key prefixes for KV store
 const MESSAGE_KEY_PREFIX = ["webrtc", "messages"];
-const CONTROLLER_KEY = ["webrtc", "controller", "active"];
+const CONTROLLER_KEY = ["webrtc:active_ctrl_client"]; // Use the same key as in active.ts
 
 // Active WebSocket connections (in-memory per instance)
 const activeConnections = new Map<string, WebSocket>();
+
+// Need to define the functions before exposing them globally
+// This will be done after the functions are defined
 
 /**
  * Register a controller in KV store
  * Only one controller should be active at a time
  */
 async function registerController(controllerId: string): Promise<void> {
-  // Store the controller ID in KV with timestamp
-  await kv.set(CONTROLLER_KEY, {
-    id: controllerId,
-    timestamp: Date.now(),
-  });
+  // Store the controller ID directly in KV
+  await kv.set(CONTROLLER_KEY, controllerId);
   console.log(`Registered controller: ${controllerId}`);
 }
 
@@ -34,7 +34,7 @@ async function unregisterController(controllerId: string): Promise<void> {
   // Get current controller to verify it's the one being unregistered
   const controller = await kv.get(CONTROLLER_KEY);
 
-  if (controller.value && controller.value.id === controllerId) {
+  if (controller.value === controllerId) {
     await kv.delete(CONTROLLER_KEY);
     console.log(`Unregistered controller: ${controllerId}`);
   }
@@ -45,7 +45,7 @@ async function unregisterController(controllerId: string): Promise<void> {
  */
 async function getActiveController(): Promise<string | null> {
   const controller = await kv.get(CONTROLLER_KEY);
-  return controller.value ? controller.value.id : null;
+  return controller.value || null;
 }
 
 /**
@@ -91,6 +91,16 @@ async function deliverQueuedMessages(clientId: string, socket: WebSocket) {
     console.error(`Error delivering queued messages to ${clientId}:`, error);
   }
 }
+
+// Make functions available to other modules via global object
+// @ts-ignore - accessing global in Deno
+const globalThis = typeof window !== "undefined" ? window : self;
+
+// @ts-ignore - setting global property
+globalThis.signalState = {
+  activeConnections,
+  queueMessage,
+};
 
 export const handler: Handlers = {
   GET: async (req) => {
@@ -170,6 +180,48 @@ export const handler: Handlers = {
           case "heartbeat":
             // Simple heartbeat to keep connection alive - no state tracking
             // Client ID must be set by a previous register message
+            break;
+
+          // Controller-kicked notification
+          case "controller-kicked":
+            if (!clientId) {
+              console.error("Client not registered");
+              return;
+            }
+
+            const kickTargetId = message.target;
+            if (!kickTargetId) {
+              console.error("Target ID missing in controller-kicked message");
+              return;
+            }
+
+            console.log(
+              `SIGNAL: Controller-kicked message from ${clientId} to ${kickTargetId}`,
+            );
+
+            // Format the kick message
+            const kickMessage = {
+              type: "controller-kicked",
+              newControllerId: message.newControllerId,
+              source: clientId,
+            };
+
+            // Try direct delivery to the kicked controller
+            const kickedControllerSocket = activeConnections.get(kickTargetId);
+            if (kickedControllerSocket && kickedControllerSocket.readyState === WebSocket.OPEN) {
+              console.log(
+                `SIGNAL: Direct delivery of controller-kicked from ${clientId} to ${kickTargetId}`,
+              );
+              kickedControllerSocket.send(JSON.stringify(kickMessage));
+              console.log(`SIGNAL: Delivered controller-kicked to ${kickTargetId}`);
+            } else {
+              // Queue the kick message for later delivery
+              console.log(
+                `SIGNAL: Target ${kickTargetId} not connected, queuing kick message`,
+              );
+              await queueMessage(kickTargetId, kickMessage);
+              console.log(`SIGNAL: Queued controller-kicked for ${kickTargetId}`);
+            }
             break;
 
           // Core WebRTC Signaling Messages - pure relay

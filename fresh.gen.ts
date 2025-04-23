@@ -6,6 +6,8 @@ import * as $_404 from "./routes/_404.tsx";
 import * as $_app from "./routes/_app.tsx";
 import * as $api_controller_active from "./routes/api/controller/active.ts";
 import * as $api_signal from "./routes/api/signal.ts";
+import * as $api_signal_clients from "./routes/api/signal/clients.ts";
+import * as $api_signal_send from "./routes/api/signal/send.ts";
 import * as $api_twilio_ice from "./routes/api/twilio-ice.ts";
 import * as $ctrl_callback from "./routes/ctrl/callback.tsx";
 import * as $ctrl_dev from "./routes/ctrl/dev.tsx";
@@ -14,6 +16,7 @@ import * as $ctrl_logout from "./routes/ctrl/logout.tsx";
 import * as $greet_name_ from "./routes/greet/[name].tsx";
 import * as $index from "./routes/index.tsx";
 import * as $Controller from "./islands/Controller.tsx";
+import * as $KickControllerButton from "./islands/KickControllerButton.tsx";
 import * as $WebRTC from "./islands/WebRTC.tsx";
 import type { Manifest } from "$fresh/server.ts";
 
@@ -23,6 +26,8 @@ const manifest = {
     "./routes/_app.tsx": $_app,
     "./routes/api/controller/active.ts": $api_controller_active,
     "./routes/api/signal.ts": $api_signal,
+    "./routes/api/signal/clients.ts": $api_signal_clients,
+    "./routes/api/signal/send.ts": $api_signal_send,
     "./routes/api/twilio-ice.ts": $api_twilio_ice,
     "./routes/ctrl/callback.tsx": $ctrl_callback,
     "./routes/ctrl/dev.tsx": $ctrl_dev,
@@ -33,6 +38,7 @@ const manifest = {
   },
   islands: {
     "./islands/Controller.tsx": $Controller,
+    "./islands/KickControllerButton.tsx": $KickControllerButton,
     "./islands/WebRTC.tsx": $WebRTC,
   },
   baseUrl: import.meta.url,

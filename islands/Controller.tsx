@@ -25,6 +25,7 @@ interface ControllerProps {
     name: string;
     id: string;
   };
+  clientId: string; // Unique client ID for this controller instance
 }
 
 // SynthControls component for displaying controls per client
@@ -613,11 +614,9 @@ function SynthControls(
   );
 }
 
-export default function Controller({ user }: ControllerProps) {
-  // State
-  const id = useSignal(
-    `controller-${Math.random().toString(36).substring(2, 8)}`,
-  );
+export default function Controller({ user, clientId }: ControllerProps) {
+  // Use the server-provided client ID
+  const id = useSignal(clientId);
   // Changed from array to Map for O(1) lookups by client ID
   const clients = useSignal<Map<string, SynthClient>>(new Map());
   const message = useSignal("");
@@ -625,6 +624,7 @@ export default function Controller({ user }: ControllerProps) {
   const controlActive = useSignal(false);
   const socket = useSignal<WebSocket | null>(null);
   const heartbeatInterval = useSignal<number | null>(null);
+  const statusCheckInterval = useSignal<number | null>(null);
   const otherController = useSignal<{ userId: string; name: string } | null>(
     null,
   );
@@ -1805,6 +1805,15 @@ export default function Controller({ user }: ControllerProps) {
         const message = JSON.parse(event.data);
 
         switch (message.type) {
+          // Handle controller-kicked message
+          case "controller-kicked":
+            addLog(`You have been kicked as controller. New controller: ${message.newControllerId}`);
+            console.log(`Received controller-kicked message. New controller: ${message.newControllerId}`);
+            
+            // Send handoff message to all connected synth clients
+            handleControllerKicked(message.newControllerId);
+            break;
+            
           // In stateless signaling, there are only WebRTC signaling messages
           // All other client management is done manually
 
@@ -1912,11 +1921,28 @@ export default function Controller({ user }: ControllerProps) {
       // Connect to WebSocket for signaling
       await connectWebSocket();
 
+      // Register as active controller with the server
+      const response = await fetch('/api/controller/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          controllerClientId: id.value
+        })
+      });
+      
+      const result = await response.json();
+      if (!result.success) {
+        addLog(`Failed to register as active controller: ${result.error}`);
+        return;
+      }
+      
+      addLog(`Successfully registered as active controller with ID: ${id.value}`);
+
       // Start connection verification
       startConnectionVerification();
       addLog("Started connection verification and latency measurement");
 
-      // Set controller as active (direct control without server registration)
+      // Set controller as active locally
       controlActive.value = true;
     } catch (error) {
       addLog(`Error initializing controller: ${error.message}`);
@@ -1951,6 +1977,48 @@ export default function Controller({ user }: ControllerProps) {
 
     addLog(`Added client ${clientId}`);
     newClientId.value = ""; // Clear input field
+  };
+  
+  // Handle being kicked as controller - send handoff to all connected synth clients
+  const handleControllerKicked = (newControllerId: string) => {
+    addLog(`Handling controller kicked event - new controller: ${newControllerId}`);
+    
+    // 1. Send handoff messages to all connected synth clients
+    for (const [clientId, connection] of connections.value.entries()) {
+      if (connection.connected && connection.dataChannel && connection.dataChannel.readyState === "open") {
+        try {
+          // Send controller handoff message
+          connection.dataChannel.send(JSON.stringify({
+            type: "controller_handoff",
+            newControllerId: newControllerId
+          }));
+          
+          addLog(`Sent handoff message to synth client ${clientId}`);
+        } catch (error) {
+          console.error(`Error sending handoff to ${clientId}:`, error);
+        }
+      }
+    }
+    
+    // 2. Update UI to show we're no longer active
+    controlActive.value = false;
+    
+    // 3. Deregister from server
+    fetch('/api/controller/active', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        controllerClientId: id.value
+      })
+    }).catch(error => {
+      console.error('Error deregistering controller:', error);
+    });
+    
+    // 4. Display message and redirect after a delay
+    setTimeout(() => {
+      // Redirect to controller page, which will show the "hold to kick" UI
+      window.location.href = '/ctrl';
+    }, 2000);
   };
 
   // Handle an offer from a client
@@ -2174,6 +2242,19 @@ export default function Controller({ user }: ControllerProps) {
 
     // Return cleanup function
     return () => {
+      // Deregister from server as active controller
+      if (controlActive.value) {
+        fetch('/api/controller/active', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            controllerClientId: id.value
+          })
+        }).catch(error => {
+          console.error("Error deregistering controller:", error);
+        });
+      }
+      
       cleanupController();
 
       if (heartbeatInterval.value !== null) {

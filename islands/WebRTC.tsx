@@ -458,6 +458,30 @@ export default function WebRTC() {
           isNoteActive.value = false;
           return;
         }
+        
+        // Handle controller handoff messages
+        if (message.type === "controller_handoff" && message.newControllerId) {
+          // Log the handoff
+          console.log(`Received controller handoff to: ${message.newControllerId}`);
+          addLog(`Controller handoff: connecting to new controller ${message.newControllerId}`);
+          
+          // Update target ID to the new controller
+          targetId.value = message.newControllerId;
+          activeController.value = message.newControllerId;
+          
+          // Close current connection after a short delay to allow message to be processed
+          setTimeout(() => {
+            // Disconnect (but not user initiated)
+            disconnect(false);
+            
+            // Connect to new controller after a short delay
+            setTimeout(() => {
+              connectToController(message.newControllerId);
+            }, 500);
+          }, 500);
+          
+          return;
+        }
       } catch (error) {
         console.error(`Error parsing JSON message:`, error);
         // Continue with non-JSON message handling

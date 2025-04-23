@@ -2,11 +2,13 @@ import { Handlers } from "$fresh/server.ts";
 
 // Open the KV store
 const kv = await Deno.openKv();
-const CONTROLLER_ACTIVE_KEY = ["webrtc:controller:active"];
-// No timeout - controller remains active until explicitly released or replaced
 
-// Store the controller client ID separately for easy access
-const CONTROLLER_CLIENT_ID_KEY = ["webrtc:controller:clientId"];
+// Simplified: store only the active controller client ID
+const ACTIVE_CTRL_CLIENT_ID = ["webrtc:active_ctrl_client"];
+
+// Access the global object for WebSocket connections
+// @ts-ignore - accessing global in Deno
+const globalThis = typeof window !== "undefined" ? window : self;
 
 // Development mode flag - set to true to bypass authentication
 const DEV_MODE = false;
@@ -72,12 +74,28 @@ export const handler: Handlers = {
       const url = new URL(req.url);
       const requestingClientId = url.searchParams.get("clientId");
 
-      const activeController = await kv.get(CONTROLLER_ACTIVE_KEY);
-      const activeClientId = await kv.get(CONTROLLER_CLIENT_ID_KEY);
-
-      if (!activeController.value) {
+      if (!requestingClientId) {
         return new Response(
-          JSON.stringify({ active: false }),
+          JSON.stringify({ 
+            success: false, 
+            error: "Client ID parameter is required" 
+          }),
+          { 
+            status: 400,
+            headers: { "Content-Type": "application/json" } 
+          },
+        );
+      }
+
+      // Get active controller client ID
+      const activeClientId = await kv.get(ACTIVE_CTRL_CLIENT_ID);
+
+      if (!activeClientId.value) {
+        return new Response(
+          JSON.stringify({ 
+            active: false,
+            requestingClientId 
+          }),
           { headers: { "Content-Type": "application/json" } },
         );
       }
@@ -85,12 +103,9 @@ export const handler: Handlers = {
       return new Response(
         JSON.stringify({
           active: true,
-          isCurrentUser: activeController.value.userId === userId,
           isCurrentClient: activeClientId.value === requestingClientId,
-          userId: activeController.value.userId,
-          name: activeController.value.name,
-          timestamp: activeController.value.timestamp,
-          controllerClientId: activeClientId.value || null,
+          controllerClientId: activeClientId.value,
+          requestingClientId
         }),
         { headers: { "Content-Type": "application/json" } },
       );
@@ -121,10 +136,9 @@ export const handler: Handlers = {
     }
 
     try {
-      // Parse request body for force flag, name, and controller client ID
+      // Parse request body for force flag and controller client ID
       const body = await req.json();
       const forceAcquire = body.force === true;
-      const name = body.name || "Unknown User";
       const controllerClientId = body.controllerClientId;
 
       if (!controllerClientId) {
@@ -140,25 +154,18 @@ export const handler: Handlers = {
         );
       }
 
-      // Try to get the current active controller
-      const existingActive = await kv.get(CONTROLLER_ACTIVE_KEY);
-      const existingClientId = await kv.get(CONTROLLER_CLIENT_ID_KEY);
+      // Try to get the current active controller client ID
+      const existingClientId = await kv.get(ACTIVE_CTRL_CLIENT_ID);
 
-      // Check if someone else is already active
-      const isCurrentClient = existingClientId.value === controllerClientId;
-
-      if (existingActive.value && !isCurrentClient) {
+      // Check if a different client is already active
+      if (existingClientId.value && existingClientId.value !== controllerClientId) {
         if (!forceAcquire) {
           // Active controller exists and user did not force acquisition
           return new Response(
             JSON.stringify({
               success: false,
               error: "Another controller is already active",
-              activeController: {
-                userId: existingActive.value.userId,
-                name: existingActive.value.name,
-                controllerClientId: existingClientId.value,
-              },
+              activeControllerClientId: existingClientId.value,
             }),
             {
               status: 409, // Conflict
@@ -169,45 +176,18 @@ export const handler: Handlers = {
 
         // Force flag is true, so we will take over
         console.log(
-          `Controller handoff: ${existingClientId.value} -> ${controllerClientId}`,
+          `Controller takeover: ${existingClientId.value} -> ${controllerClientId}`,
         );
       }
 
-      // Use atomic operations to set both values
-      const atomicOp = kv.atomic();
-
-      // Set active controller without expiration
-      atomicOp.set(CONTROLLER_ACTIVE_KEY, {
-        userId,
-        name,
-        timestamp: Date.now(),
-      });
-
-      // Store the controller client ID separately
-      atomicOp.set(CONTROLLER_CLIENT_ID_KEY, controllerClientId);
-
-      // Commit the atomic operation
-      const result = await atomicOp.commit();
-
-      // Check if the commit succeeded
-      if (!result.ok) {
-        console.error("Atomic operation failed:", result);
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: "Failed to set controller - database error",
-          }),
-          {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }
+      // Set the active controller client ID
+      await kv.set(ACTIVE_CTRL_CLIENT_ID, controllerClientId);
 
       return new Response(
         JSON.stringify({
           success: true,
-          handoff: existingActive.value && !isCurrentClient,
+          controllerClientId,
+          takeover: existingClientId.value && existingClientId.value !== controllerClientId
         }),
         { headers: { "Content-Type": "application/json" } },
       );
@@ -241,6 +221,7 @@ export const handler: Handlers = {
       // Parse request to get client ID
       const body = await req.json();
       const controllerClientId = body.controllerClientId;
+      const newControllerClientId = body.newControllerClientId; // New controller that's taking over
 
       if (!controllerClientId) {
         return new Response(
@@ -255,12 +236,14 @@ export const handler: Handlers = {
         );
       }
 
-      // Get current active controller and client ID
-      const activeController = await kv.get(CONTROLLER_ACTIVE_KEY);
-      const activeClientId = await kv.get(CONTROLLER_CLIENT_ID_KEY);
+      // Get current active controller client ID
+      const activeClientId = await kv.get(ACTIVE_CTRL_CLIENT_ID);
 
-      // Only the active controller client can release the status
-      if (activeClientId.value !== controllerClientId) {
+      // Check for special force-deactivate value that allows any authenticated user to deactivate
+      const forceDeactivate = controllerClientId === 'force-deactivate';
+      
+      // Only the active controller client or a force deactivation can release the status
+      if (activeClientId.value !== controllerClientId && !forceDeactivate) {
         return new Response(
           JSON.stringify({
             success: false,
@@ -272,15 +255,64 @@ export const handler: Handlers = {
           },
         );
       }
+      
+      // Log the forced deactivation if that's what's happening
+      if (forceDeactivate) {
+        console.log(`Forced deactivation of controller client ${activeClientId.value} by user ${userId}`);
+        
+        // If we have a new controller ID, notify the old one via the signal service
+        if (newControllerClientId && activeClientId.value) {
+          try {
+            // Instead of using fetch to the API endpoints directly, which requires absolute URLs and may
+            // cause cross-origin issues, let's just check the in-memory connections directly
+            
+            // @ts-ignore - accessing global object property
+            const signalState = globalThis.signalState;
+            let clientsData = { clients: [] };
+            
+            if (signalState?.activeConnections) {
+              clientsData.clients = Array.from(signalState.activeConnections.keys());
+            }
+            
+            // Find the active controller in the signaling clients
+            if (clientsData.clients && clientsData.clients.includes(activeClientId.value)) {
+              // Direct access to the WebSocket for the kicked controller
+              const kickedSocket = signalState?.activeConnections?.get(activeClientId.value);
+              
+              if (kickedSocket && kickedSocket.readyState === WebSocket.OPEN) {
+                // Send kick message directly through the WebSocket
+                kickedSocket.send(JSON.stringify({
+                  type: 'controller-kicked',
+                  newControllerId: newControllerClientId,
+                  source: 'system'
+                }));
+                
+                console.log(`Directly sent kick notification to controller ${activeClientId.value}`);
+              } else if (signalState?.queueMessage) {
+                // Queue the message for delivery when the client reconnects
+                await signalState.queueMessage(activeClientId.value, {
+                  type: 'controller-kicked',
+                  newControllerId: newControllerClientId,
+                  source: 'system'
+                });
+                
+                console.log(`Queued kick notification for controller ${activeClientId.value}`);
+              }
+            }
+          } catch (error) {
+            console.error("Error sending kick notification:", error);
+          }
+        }
+      }
 
-      // Delete both controller entries atomically
-      const atomicOp = kv.atomic();
-      atomicOp.delete(CONTROLLER_ACTIVE_KEY);
-      atomicOp.delete(CONTROLLER_CLIENT_ID_KEY);
-      const result = await atomicOp.commit();
+      // Delete the active controller entry
+      await kv.delete(ACTIVE_CTRL_CLIENT_ID);
 
       return new Response(
-        JSON.stringify({ success: true }),
+        JSON.stringify({ 
+          success: true,
+          previousControllerId: activeClientId.value 
+        }),
         { headers: { "Content-Type": "application/json" } },
       );
     } catch (error) {
