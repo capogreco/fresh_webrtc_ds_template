@@ -205,8 +205,9 @@ export const handler: Handlers = {
       }
 
       // Generate a unique client ID for this controller session or use the forced one from kick
-      const clientId = forcedClientId || `controller-${crypto.randomUUID().substring(0, 8)}`;
-      
+      const clientId = forcedClientId ||
+        `controller-${crypto.randomUUID().substring(0, 8)}`;
+
       // Check if there's an active controller
       let activeControllerClientId;
       try {
@@ -216,7 +217,7 @@ export const handler: Handlers = {
         // If it's a quota error, just proceed with no active controller
         activeControllerClientId = { value: null };
       }
-      
+
       // If this is a force active request and we have a matching client ID, update active controller
       if (forceActive && forcedClientId && forcedClientId === clientId) {
         console.log(`Force activating controller with client ID: ${clientId}`);
@@ -381,7 +382,13 @@ export default function ControllerPage({ data }: PageProps) {
     );
   }
 
-  const { user, clientId, isControllerActive, isCurrentClient, activeControllerClientId } = data;
+  const {
+    user,
+    clientId,
+    isControllerActive,
+    isCurrentClient,
+    activeControllerClientId,
+  } = data;
 
   // Make sure user object exists
   if (!user || typeof user !== "object") {
@@ -411,10 +418,10 @@ export default function ControllerPage({ data }: PageProps) {
           Another controller client is already active.
         </p>
         <div style="margin-top: 20px;">
-          <KickControllerButton 
-            user={user} 
-            clientId={clientId} 
-            activeControllerClientId={activeControllerClientId} 
+          <KickControllerButton
+            user={user}
+            clientId={clientId}
+            activeControllerClientId={activeControllerClientId}
           />
         </div>
       </div>

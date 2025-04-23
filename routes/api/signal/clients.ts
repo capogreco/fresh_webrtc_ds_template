@@ -10,7 +10,10 @@ declare global {
   interface Window {
     signalState: {
       activeConnections: Map<string, WebSocket>;
-      queueMessage: (targetId: string, message: Record<string, unknown>) => Promise<void>;
+      queueMessage: (
+        targetId: string,
+        message: Record<string, unknown>,
+      ) => Promise<void>;
     };
   }
 }
@@ -34,22 +37,22 @@ export const handler: Handlers = {
             success: true,
             clients: [],
           }),
-          { 
+          {
             status: 200,
             headers: { "Content-Type": "application/json" },
           },
         );
       }
-      
+
       // Get all clients from the activeConnections map
       const clientIds = Array.from(activeConnections.keys());
-      
+
       return new Response(
         JSON.stringify({
           success: true,
           clients: clientIds,
         }),
-        { 
+        {
           status: 200,
           headers: { "Content-Type": "application/json" },
         },
@@ -57,11 +60,12 @@ export const handler: Handlers = {
     } catch (error) {
       console.error("Error getting active clients:", error);
       return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: "Failed to get active clients: " + (error?.message || String(error))
+        JSON.stringify({
+          success: false,
+          error: "Failed to get active clients: " +
+            (error?.message || String(error)),
         }),
-        { 
+        {
           status: 500,
           headers: { "Content-Type": "application/json" },
         },

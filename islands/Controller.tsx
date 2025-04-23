@@ -1,6 +1,9 @@
 import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { requestWakeLock, setupWakeLockListeners } from "../lib/utils/wakeLock.ts";
+import {
+  requestWakeLock,
+  setupWakeLockListeners,
+} from "../lib/utils/wakeLock.ts";
 import type { SynthClient } from "../lib/types/client.ts";
 import {
   DEFAULT_SYNTH_PARAMS,
@@ -1181,7 +1184,11 @@ export default function Controller({ user, clientId }: ControllerProps) {
       addLog(`Sent test message to client ${clientId}: ${testMessage}`);
 
       // Set a latency value for testing - not stale since this is a synthetic test
-      updateClientLatency(clientId, Math.floor(Math.random() * 100) + 10, false);
+      updateClientLatency(
+        clientId,
+        Math.floor(Math.random() * 100) + 10,
+        false,
+      );
     } catch (error) {
       console.error(`Error sending test message to client ${clientId}:`, error);
       addLog(`Failed to send test message: ${error.message}`);
@@ -1203,7 +1210,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
 
     const connection = connections.value.get(clientId);
     const client = clients.value.get(clientId);
-    
+
     // Create ping with current timestamp
     const timestamp = Date.now();
     pingTimestamps.set(clientId, timestamp);
@@ -1236,11 +1243,15 @@ export default function Controller({ user, clientId }: ControllerProps) {
             // Only update if we have a valid previous latency
             if (latency > 0) {
               updateClientLatency(clientId, latency, true); // Mark as stale
-              addLog(`Client ${clientId} ping timed out - connection may be unstable`);
+              addLog(
+                `Client ${clientId} ping timed out - connection may be unstable`,
+              );
             } else {
               // If we don't have a valid previous value, use a placeholder
               updateClientLatency(clientId, 100, true);
-              addLog(`Client ${clientId} ping timed out - using placeholder latency`);
+              addLog(
+                `Client ${clientId} ping timed out - using placeholder latency`,
+              );
             }
           }
         }
@@ -1683,7 +1694,11 @@ export default function Controller({ user, clientId }: ControllerProps) {
   };
 
   // Helper function to update client latency
-  const updateClientLatency = (clientId: string, latency: number, stale: boolean = false) => {
+  const updateClientLatency = (
+    clientId: string,
+    latency: number,
+    stale: boolean = false,
+  ) => {
     // Create a new Map to maintain reactivity
     const newClients = new Map(clients.value);
     const client = newClients.get(clientId);
@@ -1703,13 +1718,18 @@ export default function Controller({ user, clientId }: ControllerProps) {
       // Update the signal with the new Map
       clients.value = newClients;
 
-      console.log(`[CONTROLLER] Updated ${clientId} with latency=${latency}ms (stale=${stale})`);
+      console.log(
+        `[CONTROLLER] Updated ${clientId} with latency=${latency}ms (stale=${stale})`,
+      );
 
       // Force a re-render by triggering another update after a tiny delay if needed
       // This ensures the UI always reflects the latest latency
       setTimeout(() => {
         const latestClient = clients.value.get(clientId);
-        if (latestClient?.latency !== latency || latestClient?.staleLatency !== stale) {
+        if (
+          latestClient?.latency !== latency ||
+          latestClient?.staleLatency !== stale
+        ) {
           console.log(`[CONTROLLER] Forcing latency update for ${clientId}`);
           clients.value = new Map(clients.value);
         }
@@ -1807,13 +1827,17 @@ export default function Controller({ user, clientId }: ControllerProps) {
         switch (message.type) {
           // Handle controller-kicked message
           case "controller-kicked":
-            addLog(`You have been kicked as controller. New controller: ${message.newControllerId}`);
-            console.log(`Received controller-kicked message. New controller: ${message.newControllerId}`);
-            
+            addLog(
+              `You have been kicked as controller. New controller: ${message.newControllerId}`,
+            );
+            console.log(
+              `Received controller-kicked message. New controller: ${message.newControllerId}`,
+            );
+
             // Send handoff message to all connected synth clients
             handleControllerKicked(message.newControllerId);
             break;
-            
+
           // In stateless signaling, there are only WebRTC signaling messages
           // All other client management is done manually
 
@@ -1922,21 +1946,23 @@ export default function Controller({ user, clientId }: ControllerProps) {
       await connectWebSocket();
 
       // Register as active controller with the server
-      const response = await fetch('/api/controller/active', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch("/api/controller/active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          controllerClientId: id.value
-        })
+          controllerClientId: id.value,
+        }),
       });
-      
+
       const result = await response.json();
       if (!result.success) {
         addLog(`Failed to register as active controller: ${result.error}`);
         return;
       }
-      
-      addLog(`Successfully registered as active controller with ID: ${id.value}`);
+
+      addLog(
+        `Successfully registered as active controller with ID: ${id.value}`,
+      );
 
       // Start connection verification
       startConnectionVerification();
@@ -1978,46 +2004,51 @@ export default function Controller({ user, clientId }: ControllerProps) {
     addLog(`Added client ${clientId}`);
     newClientId.value = ""; // Clear input field
   };
-  
+
   // Handle being kicked as controller - send handoff to all connected synth clients
   const handleControllerKicked = (newControllerId: string) => {
-    addLog(`Handling controller kicked event - new controller: ${newControllerId}`);
-    
+    addLog(
+      `Handling controller kicked event - new controller: ${newControllerId}`,
+    );
+
     // 1. Send handoff messages to all connected synth clients
     for (const [clientId, connection] of connections.value.entries()) {
-      if (connection.connected && connection.dataChannel && connection.dataChannel.readyState === "open") {
+      if (
+        connection.connected && connection.dataChannel &&
+        connection.dataChannel.readyState === "open"
+      ) {
         try {
           // Send controller handoff message
           connection.dataChannel.send(JSON.stringify({
             type: "controller_handoff",
-            newControllerId: newControllerId
+            newControllerId: newControllerId,
           }));
-          
+
           addLog(`Sent handoff message to synth client ${clientId}`);
         } catch (error) {
           console.error(`Error sending handoff to ${clientId}:`, error);
         }
       }
     }
-    
+
     // 2. Update UI to show we're no longer active
     controlActive.value = false;
-    
+
     // 3. Deregister from server
-    fetch('/api/controller/active', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+    fetch("/api/controller/active", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        controllerClientId: id.value
-      })
-    }).catch(error => {
-      console.error('Error deregistering controller:', error);
+        controllerClientId: id.value,
+      }),
+    }).catch((error) => {
+      console.error("Error deregistering controller:", error);
     });
-    
+
     // 4. Display message and redirect after a delay
     setTimeout(() => {
       // Redirect to controller page, which will show the "hold to kick" UI
-      window.location.href = '/ctrl';
+      window.location.href = "/ctrl";
     }, 2000);
   };
 
@@ -2228,44 +2259,46 @@ export default function Controller({ user, clientId }: ControllerProps) {
   useEffect(() => {
     // Automatically initialize the controller
     initializeController();
-    
+
     // Request wake lock to prevent screen from sleeping
-    requestWakeLock().then(lock => {
+    requestWakeLock().then((lock) => {
       wakeLock.value = lock;
     });
-    
+
     // Setup wake lock event listeners for reacquisition
     const cleanup = setupWakeLockListeners(
       () => wakeLock.value,
-      (lock) => wakeLock.value = lock
+      (lock) => wakeLock.value = lock,
     );
 
     // Return cleanup function
     return () => {
       // Deregister from server as active controller
       if (controlActive.value) {
-        fetch('/api/controller/active', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
+        fetch("/api/controller/active", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            controllerClientId: id.value
-          })
-        }).catch(error => {
+            controllerClientId: id.value,
+          }),
+        }).catch((error) => {
           console.error("Error deregistering controller:", error);
         });
       }
-      
+
       cleanupController();
 
       if (heartbeatInterval.value !== null) {
         clearInterval(heartbeatInterval.value);
       }
-      
+
       // Release wake lock
       if (wakeLock.value) {
-        wakeLock.value.release().catch(err => console.error("Error releasing wake lock", err));
+        wakeLock.value.release().catch((err) =>
+          console.error("Error releasing wake lock", err)
+        );
       }
-      
+
       // Remove wake lock event listeners
       if (cleanup) cleanup();
     };
@@ -2282,8 +2315,12 @@ export default function Controller({ user, clientId }: ControllerProps) {
             <span class="controller-id">Controller ID: {id.value}</span>
             <span class="connection-status status-active">Ready</span>
             <span
-              class={`wake-lock-status ${wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"}`}
-              title={wakeLock.value ? "Screen will stay awake" : "Screen may sleep (no wake lock)"}
+              class={`wake-lock-status ${
+                wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"
+              }`}
+              title={wakeLock.value
+                ? "Screen will stay awake"
+                : "Screen may sleep (no wake lock)"}
             >
               {wakeLock.value ? "🔆 Wake Lock" : "💤 No Wake Lock"}
             </span>
@@ -2348,10 +2385,20 @@ export default function Controller({ user, clientId }: ControllerProps) {
                           {connections.value.has(client.id) &&
                               connections.value.get(client.id)?.connected
                             ? (client.latency === -1
-                              ? <span className="latency-measuring">measuring...</span>
-                              : <span className={client.staleLatency ? "latency-stale" : ""}>
+                              ? (
+                                <span className="latency-measuring">
+                                  measuring...
+                                </span>
+                              )
+                              : (
+                                <span
+                                  className={client.staleLatency
+                                    ? "latency-stale"
+                                    : ""}
+                                >
                                   {client.latency || 0}ms
-                                </span>)
+                                </span>
+                              ))
                             : ""}
                         </span>
 
@@ -2374,7 +2421,9 @@ export default function Controller({ user, clientId }: ControllerProps) {
                                 : "Audio muted"}
                             >
                               {!client.isMuted
-                                ? (client.audioState === "running" ? "🔊" : "🔈")
+                                ? (client.audioState === "running"
+                                  ? "🔊"
+                                  : "🔈")
                                 : "🔇"}
                             </span>
                             <span

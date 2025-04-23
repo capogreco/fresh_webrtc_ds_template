@@ -1,6 +1,9 @@
 import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { requestWakeLock, setupWakeLockListeners } from "../lib/utils/wakeLock.ts";
+import {
+  requestWakeLock,
+  setupWakeLockListeners,
+} from "../lib/utils/wakeLock.ts";
 import {
   DEFAULT_SYNTH_PARAMS,
   frequencyToNote,
@@ -197,7 +200,7 @@ export default function WebRTC() {
         type: "audio_state",
         isMuted: true, // Audio is muted
         audioState: "disabled",
-        pendingNote: isNoteActive.value // Let controller know if there's a pending note
+        pendingNote: isNoteActive.value, // Let controller know if there's a pending note
       }));
       addLog("Sent audio state to controller (audio not enabled)");
     } catch (error) {
@@ -385,8 +388,10 @@ export default function WebRTC() {
               );
             } else if (isNoteActive.value && (isMuted.value || !audioContext)) {
               // If muted or no audio context, just log the note request and notify controller
-              addLog(`Note ${currentNote.value} requested but audio not enabled`);
-              
+              addLog(
+                `Note ${currentNote.value} requested but audio not enabled`,
+              );
+
               // Let controller know that audio is muted but note is pending
               if (channel.readyState === "open") {
                 try {
@@ -394,7 +399,7 @@ export default function WebRTC() {
                     type: "audio_state",
                     isMuted: true,
                     audioState: "disabled",
-                    pendingNote: true
+                    pendingNote: true,
                   }));
                 } catch (error) {
                   console.error("Error sending audio state:", error);
@@ -421,18 +426,22 @@ export default function WebRTC() {
             // Update the frequency value
             frequency.value = message.frequency;
             currentNote.value = frequencyToNote(message.frequency);
-            
+
             // Always update state to track that note should be on
             isNoteActive.value = true;
-            
+
             // Only play sound if audio is already initialized
             if (audioContext && !isMuted.value) {
               noteOn(message.frequency);
-              addLog(`Playing note ${currentNote.value} (${frequency.value}Hz)`);
+              addLog(
+                `Playing note ${currentNote.value} (${frequency.value}Hz)`,
+              );
             } else {
               // If audio not enabled, just log the message and notify controller
-              addLog(`Note ${currentNote.value} requested but audio not enabled`);
-              
+              addLog(
+                `Note ${currentNote.value} requested but audio not enabled`,
+              );
+
               // Let controller know that audio is muted
               if (channel.readyState === "open") {
                 try {
@@ -440,7 +449,7 @@ export default function WebRTC() {
                     type: "audio_state",
                     isMuted: true,
                     audioState: "disabled",
-                    pendingNote: true
+                    pendingNote: true,
                   }));
                 } catch (error) {
                   console.error("Error sending audio state:", error);
@@ -458,28 +467,32 @@ export default function WebRTC() {
           isNoteActive.value = false;
           return;
         }
-        
+
         // Handle controller handoff messages
         if (message.type === "controller_handoff" && message.newControllerId) {
           // Log the handoff
-          console.log(`Received controller handoff to: ${message.newControllerId}`);
-          addLog(`Controller handoff: connecting to new controller ${message.newControllerId}`);
-          
+          console.log(
+            `Received controller handoff to: ${message.newControllerId}`,
+          );
+          addLog(
+            `Controller handoff: connecting to new controller ${message.newControllerId}`,
+          );
+
           // Update target ID to the new controller
           targetId.value = message.newControllerId;
           activeController.value = message.newControllerId;
-          
+
           // Close current connection after a short delay to allow message to be processed
           setTimeout(() => {
             // Disconnect (but not user initiated)
             disconnect(false);
-            
+
             // Connect to new controller after a short delay
             setTimeout(() => {
               connectToController(message.newControllerId);
             }, 500);
           }, 500);
-          
+
           return;
         }
       } catch (error) {
@@ -1045,13 +1058,13 @@ export default function WebRTC() {
           isMuted: isMuted.value,
           audioState: audioState.value,
           pendingNote: false, // No pending notes when audio is enabled
-          isNoteActive: isNoteActive.value // Current note state
+          isNoteActive: isNoteActive.value, // Current note state
         }));
         console.log(
           "Sent audio state update:",
           isMuted.value ? "muted" : "unmuted",
           audioState.value,
-          isNoteActive.value ? "note active" : "note inactive"
+          isNoteActive.value ? "note active" : "note inactive",
         );
       } catch (error) {
         console.error("Error sending audio state:", error);
@@ -1062,14 +1075,14 @@ export default function WebRTC() {
   // Initialize audio context with user gesture
   const initAudioContext = () => {
     try {
+      // Track previous audio state before making any changes
+      const wasNoteActive = isNoteActive.value;
+
       // Create audio context if it doesn't exist
       if (!audioContext) {
-        audioContext =
-          new (window.AudioContext || (window as any).webkitAudioContext)();
+        audioContext = new (globalThis.AudioContext ||
+          (globalThis as any).webkitAudioContext)();
         addLog("Audio context created");
-          
-        // Track previous audio state
-        const wasNoteActive = isNoteActive.value;
 
         // Create audio processing chain:
         // Oscillator -> Vibrato -> Filter -> GainNode (volume) -> Destination
@@ -1218,7 +1231,9 @@ export default function WebRTC() {
           "[SYNTH] Auto-playing note because controller has Note On selected",
         );
         noteOn(frequency.value);
-        addLog(`Auto-playing note ${currentNote.value} (${frequency.value}Hz) after enabling audio`);
+        addLog(
+          `Auto-playing note ${currentNote.value} (${frequency.value}Hz) after enabling audio`,
+        );
       }
 
       // Send audio state to controller if connected
@@ -1916,16 +1931,16 @@ export default function WebRTC() {
   useEffect(() => {
     // Connect to signaling server (but don't enable audio yet)
     connectWebSocket();
-    
+
     // Request wake lock to prevent screen from sleeping
-    requestWakeLock().then(lock => {
+    requestWakeLock().then((lock) => {
       wakeLock.value = lock;
     });
-    
+
     // Setup wake lock event listeners for reacquisition
     const cleanup = setupWakeLockListeners(
       () => wakeLock.value,
-      (lock) => wakeLock.value = lock
+      (lock) => wakeLock.value = lock,
     );
 
     // Set up periodic connection checks for auto-reconnection
@@ -1946,12 +1961,14 @@ export default function WebRTC() {
       // Clear intervals
       clearInterval(reconnectionInterval);
       clearInterval(controllerRefreshInterval);
-      
+
       // Release wake lock
       if (wakeLock.value) {
-        wakeLock.value.release().catch(err => console.error("Error releasing wake lock", err));
+        wakeLock.value.release().catch((err) =>
+          console.error("Error releasing wake lock", err)
+        );
       }
-      
+
       // Remove wake lock event listeners
       if (cleanup) cleanup();
 
@@ -2087,8 +2104,12 @@ export default function WebRTC() {
                   Audio: {audioState.value}
                 </span>
                 <span
-                  class={`wake-lock-status ${wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"}`}
-                  title={wakeLock.value ? "Screen will stay awake" : "Screen may sleep (no wake lock)"}
+                  class={`wake-lock-status ${
+                    wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"
+                  }`}
+                  title={wakeLock.value
+                    ? "Screen will stay awake"
+                    : "Screen may sleep (no wake lock)"}
                 >
                   {wakeLock.value ? "🔆 Wake Lock" : "💤 No Wake Lock"}
                 </span>

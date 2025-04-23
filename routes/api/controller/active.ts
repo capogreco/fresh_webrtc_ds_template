@@ -76,13 +76,13 @@ export const handler: Handlers = {
 
       if (!requestingClientId) {
         return new Response(
-          JSON.stringify({ 
-            success: false, 
-            error: "Client ID parameter is required" 
+          JSON.stringify({
+            success: false,
+            error: "Client ID parameter is required",
           }),
-          { 
+          {
             status: 400,
-            headers: { "Content-Type": "application/json" } 
+            headers: { "Content-Type": "application/json" },
           },
         );
       }
@@ -92,9 +92,9 @@ export const handler: Handlers = {
 
       if (!activeClientId.value) {
         return new Response(
-          JSON.stringify({ 
+          JSON.stringify({
             active: false,
-            requestingClientId 
+            requestingClientId,
           }),
           { headers: { "Content-Type": "application/json" } },
         );
@@ -105,7 +105,7 @@ export const handler: Handlers = {
           active: true,
           isCurrentClient: activeClientId.value === requestingClientId,
           controllerClientId: activeClientId.value,
-          requestingClientId
+          requestingClientId,
         }),
         { headers: { "Content-Type": "application/json" } },
       );
@@ -158,7 +158,9 @@ export const handler: Handlers = {
       const existingClientId = await kv.get(ACTIVE_CTRL_CLIENT_ID);
 
       // Check if a different client is already active
-      if (existingClientId.value && existingClientId.value !== controllerClientId) {
+      if (
+        existingClientId.value && existingClientId.value !== controllerClientId
+      ) {
         if (!forceAcquire) {
           // Active controller exists and user did not force acquisition
           return new Response(
@@ -187,7 +189,8 @@ export const handler: Handlers = {
         JSON.stringify({
           success: true,
           controllerClientId,
-          takeover: existingClientId.value && existingClientId.value !== controllerClientId
+          takeover: existingClientId.value &&
+            existingClientId.value !== controllerClientId,
         }),
         { headers: { "Content-Type": "application/json" } },
       );
@@ -240,8 +243,8 @@ export const handler: Handlers = {
       const activeClientId = await kv.get(ACTIVE_CTRL_CLIENT_ID);
 
       // Check for special force-deactivate value that allows any authenticated user to deactivate
-      const forceDeactivate = controllerClientId === 'force-deactivate';
-      
+      const forceDeactivate = controllerClientId === "force-deactivate";
+
       // Only the active controller client or a force deactivation can release the status
       if (activeClientId.value !== controllerClientId && !forceDeactivate) {
         return new Response(
@@ -255,48 +258,61 @@ export const handler: Handlers = {
           },
         );
       }
-      
+
       // Log the forced deactivation if that's what's happening
       if (forceDeactivate) {
-        console.log(`Forced deactivation of controller client ${activeClientId.value} by user ${userId}`);
-        
+        console.log(
+          `Forced deactivation of controller client ${activeClientId.value} by user ${userId}`,
+        );
+
         // If we have a new controller ID, notify the old one via the signal service
         if (newControllerClientId && activeClientId.value) {
           try {
             // Instead of using fetch to the API endpoints directly, which requires absolute URLs and may
             // cause cross-origin issues, let's just check the in-memory connections directly
-            
+
             // @ts-ignore - accessing global object property
             const signalState = globalThis.signalState;
             let clientsData = { clients: [] };
-            
+
             if (signalState?.activeConnections) {
-              clientsData.clients = Array.from(signalState.activeConnections.keys());
+              clientsData.clients = Array.from(
+                signalState.activeConnections.keys(),
+              );
             }
-            
+
             // Find the active controller in the signaling clients
-            if (clientsData.clients && clientsData.clients.includes(activeClientId.value)) {
+            if (
+              clientsData.clients &&
+              clientsData.clients.includes(activeClientId.value)
+            ) {
               // Direct access to the WebSocket for the kicked controller
-              const kickedSocket = signalState?.activeConnections?.get(activeClientId.value);
-              
+              const kickedSocket = signalState?.activeConnections?.get(
+                activeClientId.value,
+              );
+
               if (kickedSocket && kickedSocket.readyState === WebSocket.OPEN) {
                 // Send kick message directly through the WebSocket
                 kickedSocket.send(JSON.stringify({
-                  type: 'controller-kicked',
+                  type: "controller-kicked",
                   newControllerId: newControllerClientId,
-                  source: 'system'
+                  source: "system",
                 }));
-                
-                console.log(`Directly sent kick notification to controller ${activeClientId.value}`);
+
+                console.log(
+                  `Directly sent kick notification to controller ${activeClientId.value}`,
+                );
               } else if (signalState?.queueMessage) {
                 // Queue the message for delivery when the client reconnects
                 await signalState.queueMessage(activeClientId.value, {
-                  type: 'controller-kicked',
+                  type: "controller-kicked",
                   newControllerId: newControllerClientId,
-                  source: 'system'
+                  source: "system",
                 });
-                
-                console.log(`Queued kick notification for controller ${activeClientId.value}`);
+
+                console.log(
+                  `Queued kick notification for controller ${activeClientId.value}`,
+                );
               }
             }
           } catch (error) {
@@ -309,9 +325,9 @@ export const handler: Handlers = {
       await kv.delete(ACTIVE_CTRL_CLIENT_ID);
 
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify({
           success: true,
-          previousControllerId: activeClientId.value 
+          previousControllerId: activeClientId.value,
         }),
         { headers: { "Content-Type": "application/json" } },
       );

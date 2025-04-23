@@ -208,19 +208,26 @@ export const handler: Handlers = {
 
             // Try direct delivery to the kicked controller
             const kickedControllerSocket = activeConnections.get(kickTargetId);
-            if (kickedControllerSocket && kickedControllerSocket.readyState === WebSocket.OPEN) {
+            if (
+              kickedControllerSocket &&
+              kickedControllerSocket.readyState === WebSocket.OPEN
+            ) {
               console.log(
                 `SIGNAL: Direct delivery of controller-kicked from ${clientId} to ${kickTargetId}`,
               );
               kickedControllerSocket.send(JSON.stringify(kickMessage));
-              console.log(`SIGNAL: Delivered controller-kicked to ${kickTargetId}`);
+              console.log(
+                `SIGNAL: Delivered controller-kicked to ${kickTargetId}`,
+              );
             } else {
               // Queue the kick message for later delivery
               console.log(
                 `SIGNAL: Target ${kickTargetId} not connected, queuing kick message`,
               );
               await queueMessage(kickTargetId, kickMessage);
-              console.log(`SIGNAL: Queued controller-kicked for ${kickTargetId}`);
+              console.log(
+                `SIGNAL: Queued controller-kicked for ${kickTargetId}`,
+              );
             }
             break;
 

@@ -476,9 +476,15 @@ button:disabled {
 }
 
 @keyframes pulse {
-  0% { opacity: 0.2; }
-  50% { opacity: 1; }
-  100% { opacity: 0.2; }
+  0% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.2;
+  }
 }
 
 .client-id {
@@ -1057,12 +1063,12 @@ input:checked + .slider:before {
   overflow: hidden;
   text-align: center;
   -webkit-touch-callout: none; /* iOS Safari */
-  -webkit-user-select: none;   /* Safari */
-  -khtml-user-select: none;    /* Konqueror HTML */
-  -moz-user-select: none;      /* Firefox */
-  -ms-user-select: none;       /* Internet Explorer/Edge */
-  user-select: none;           /* Non-prefixed version */
-  touch-action: none;          /* Prevent scrolling on touch */
+  -webkit-user-select: none; /* Safari */
+  -khtml-user-select: none; /* Konqueror HTML */
+  -moz-user-select: none; /* Firefox */
+  -ms-user-select: none; /* Internet Explorer/Edge */
+  user-select: none; /* Non-prefixed version */
+  touch-action: none; /* Prevent scrolling on touch */
 }
 
 .kick-controller-button:hover {
@@ -1123,9 +1129,15 @@ input:checked + .slider:before {
 }
 
 @keyframes pulse-kick {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.05); }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .kick-controller-button.kicking {

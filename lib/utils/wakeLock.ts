@@ -33,7 +33,8 @@ export async function requestWakeLock(): Promise<WakeLockSentinel | null> {
   }
 
   try {
-    const wakeLockSentinel = await (navigator as WakeLockNavigator).wakeLock?.request("screen");
+    const wakeLockSentinel = await (navigator as WakeLockNavigator).wakeLock
+      ?.request("screen");
     console.log("Wake lock acquired");
     return wakeLockSentinel || null;
   } catch (err) {
@@ -47,11 +48,13 @@ export async function requestWakeLock(): Promise<WakeLockSentinel | null> {
  * @param wakeLockSentinel The active wake lock to release
  * @returns Promise that resolves when lock is released
  */
-export async function releaseWakeLock(wakeLockSentinel: WakeLockSentinel | null): Promise<void> {
+export async function releaseWakeLock(
+  wakeLockSentinel: WakeLockSentinel | null,
+): Promise<void> {
   if (!wakeLockSentinel) {
     return;
   }
-  
+
   try {
     await wakeLockSentinel.release();
     console.log("Wake lock released");
@@ -67,7 +70,7 @@ export async function releaseWakeLock(wakeLockSentinel: WakeLockSentinel | null)
  */
 export function setupWakeLockListeners(
   getWakeLock: () => WakeLockSentinel | null,
-  setWakeLock: (lock: WakeLockSentinel | null) => void
+  setWakeLock: (lock: WakeLockSentinel | null) => void,
 ): void {
   // Reacquire wake lock when page becomes visible again
   document.addEventListener("visibilitychange", async () => {
