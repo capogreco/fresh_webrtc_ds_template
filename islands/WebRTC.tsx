@@ -97,6 +97,8 @@ export default function WebRTC() {
     unit?: string; // Unit of measurement for logging
     extraUpdates?: ((value: T) => void) | null; // Additional updates to perform
     skipSendToController?: boolean; // Skip sending to controller
+    rampTime?: number; // Time in seconds for parameter ramping (0 for immediate)
+    useExponentialRamp?: boolean; // Whether to use exponential ramping vs linear
   };
 
   // Utility for sending a parameter update to controller
@@ -124,6 +126,8 @@ export default function WebRTC() {
     unit = "",
     extraUpdates = null,
     skipSendToController = false,
+    rampTime = 0, // Default: no ramping
+    useExponentialRamp = false, // Default: linear ramping
   }: AudioParamUpdateOptions<T>) => {
     // Update the signal value
     signal.value = newValue;
@@ -131,7 +135,33 @@ export default function WebRTC() {
     // Update the audio node if provided and audioContext exists
     if (audioNode && audioContext) {
       const now = audioContext.currentTime;
-      audioNode.setValueAtTime(newValue as number, now);
+
+      // If ramping is enabled
+      if (rampTime > 0) {
+        // Cancel any scheduled parameter changes
+        audioNode.cancelScheduledValues(now);
+
+        // Set current value at current time to start the ramp from
+        const currentValue = audioNode.value;
+        audioNode.setValueAtTime(currentValue, now);
+
+        // Use exponential ramp for frequency (must be > 0) or linear ramp otherwise
+        if (
+          useExponentialRamp && currentValue > 0 && (newValue as number) > 0
+        ) {
+          // Exponential ramps sound more natural for frequency changes
+          audioNode.exponentialRampToValueAtTime(
+            newValue as number,
+            now + rampTime,
+          );
+        } else {
+          // Linear ramp for other parameters or if values are zero/negative
+          audioNode.linearRampToValueAtTime(newValue as number, now + rampTime);
+        }
+      } else {
+        // Immediate change without ramping
+        audioNode.setValueAtTime(newValue as number, now);
+      }
     }
 
     // Perform any extra updates
@@ -1388,30 +1418,30 @@ export default function WebRTC() {
 
     // Update the gain node if it exists
     if (gainNode && audioContext) {
-      const now = audioContext.currentTime;
-
       // Don't interrupt attack/release envelopes
-      // Only set the volume if the oscillator is in steady state and a note is active
-      if (oscillator && isNoteActive.value) {
-        // Check the current scheduled events - if there's a ramp in progress, don't interrupt it
+      // Only update the volume if the oscillator is in steady state or there's no oscillator
+      if ((oscillator && isNoteActive.value) || !oscillator) {
+        // Check the current gain value
         const currentGain = gainNode.gain.value;
 
-        // If gain is very low (during attack) or very high (steady state),
-        // just update target volume for future envelopes
-        if (currentGain > 0.9 * volume.value) {
-          // We're at or near full volume, safe to update directly
-          gainNode.gain.cancelScheduledValues(now);
-          gainNode.gain.setValueAtTime(newVolume, now);
+        // If we're in steady state (not in middle of attack/release) it's safe to update
+        if (currentGain > 0.9 * volume.value || !oscillator) {
+          updateAudioParam({
+            signal: volume,
+            paramName: "Volume",
+            newValue: newVolume,
+            audioNode: gainNode.gain,
+            formatValue: (val) => `${Math.round(val * 100)}%`,
+            rampTime: 0.02, // 20ms ramp time
+            useExponentialRamp: false, // Linear ramping for volume
+            skipSendToController: true, // We'll handle controller updates manually
+          });
         }
         // Otherwise we're probably in an attack or release phase, don't interrupt
-      } else if (!oscillator) {
-        // No oscillator active, just update the value directly
-        gainNode.gain.cancelScheduledValues(now);
-        gainNode.gain.setValueAtTime(newVolume, now);
+      } else {
+        // Just update the signal without changing audio - it will be used next time a note is played
+        addLog(`Volume updated to ${Math.round(newVolume * 100)}%`);
       }
-
-      // Log the update
-      addLog(`Volume updated to ${Math.round(newVolume * 100)}%`);
     } else {
       // Just log if no gainNode exists
       addLog(`Volume updated to ${Math.round(newVolume * 100)}%`);
@@ -1554,6 +1584,8 @@ export default function WebRTC() {
         unit: "Hz",
         formatValue: (val) =>
           val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`,
+        rampTime: 0.02, // 20ms ramp time
+        useExponentialRamp: true, // Use exponential ramping for frequency
       });
     } else {
       // Just update the signal if no filter exists
@@ -1594,6 +1626,8 @@ export default function WebRTC() {
         newValue: resonance,
         audioNode: filterNode.Q,
         formatValue: (val) => val.toFixed(1),
+        rampTime: 0.02, // 20ms ramp time
+        useExponentialRamp: false, // Linear ramping for resonance
       });
     } else {
       // Just update the signal if no filter exists
