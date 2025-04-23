@@ -2181,6 +2181,12 @@ export default function Controller({ user }: ControllerProps) {
           <div>
             <span class="controller-id">Controller ID: {id.value}</span>
             <span class="connection-status status-active">Ready</span>
+            <span
+              class={`wake-lock-status ${wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"}`}
+              title={wakeLock.value ? "Screen will stay awake" : "Screen may sleep (no wake lock)"}
+            >
+              {wakeLock.value ? "🔆 Wake Lock" : "💤 No Wake Lock"}
+            </span>
             <a href="/ctrl/logout" class="logout-link">Logout</a>
           </div>
         </div>
@@ -2250,20 +2256,28 @@ export default function Controller({ user }: ControllerProps) {
                         {/* Audio Status Indicator */}
                         {connections.value.has(client.id) &&
                           connections.value.get(client.id)?.connected && (
-                          <span
-                            class={`audio-status-indicator ${
-                              !client.isMuted
-                                ? "audio-enabled"
-                                : "audio-disabled"
-                            }`}
-                            title={!client.isMuted
-                              ? `Audio ${client.audioState || "enabled"}`
-                              : "Audio muted"}
-                          >
-                            {!client.isMuted
-                              ? (client.audioState === "running" ? "🔊" : "🔈")
-                              : "🔇"}
-                          </span>
+                          <>
+                            <span
+                              class={`audio-status-indicator ${
+                                !client.isMuted
+                                  ? "audio-enabled"
+                                  : "audio-disabled"
+                              }`}
+                              title={!client.isMuted
+                                ? `Audio ${client.audioState || "enabled"}`
+                                : "Audio muted"}
+                            >
+                              {!client.isMuted
+                                ? (client.audioState === "running" ? "🔊" : "🔈")
+                                : "🔇"}
+                            </span>
+                            <span
+                              class="client-wake-lock-indicator"
+                              title="Wake lock presumed active on client"
+                            >
+                              🔆
+                            </span>
+                          </>
                         )}
                       </div>
                       <span

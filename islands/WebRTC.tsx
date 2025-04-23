@@ -2017,6 +2017,12 @@ export default function WebRTC() {
                 <span class={`audio-status audio-${audioState.value}`}>
                   Audio: {audioState.value}
                 </span>
+                <span
+                  class={`wake-lock-status ${wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"}`}
+                  title={wakeLock.value ? "Screen will stay awake" : "Screen may sleep (no wake lock)"}
+                >
+                  {wakeLock.value ? "🔆 Wake Lock" : "💤 No Wake Lock"}
+                </span>
               </div>
 
               {/* Controller auto-discovery implemented via minimal KV store */}

@@ -977,3 +977,29 @@ input:checked + .slider:before {
   border-radius: 4px;
   font-weight: bold;
 }
+
+/* Wake lock status styling */
+.wake-lock-status {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: help;
+}
+
+.wake-lock-active {
+  background-color: #ffc107;
+  color: #000;
+}
+
+.wake-lock-inactive {
+  background-color: #6c757d;
+  color: #fff;
+}
+
+.client-wake-lock-indicator {
+  margin-left: 5px;
+  cursor: help;
+}
