@@ -459,6 +459,28 @@ button:disabled {
   color: #fc8181;
 }
 
+/* Special style for pending notes */
+.audio-pending-note {
+  color: #fc8181;
+  position: relative;
+}
+
+.audio-pending-note::after {
+  content: "•";
+  position: absolute;
+  top: -8px;
+  right: -5px;
+  color: #ffc107;
+  font-size: 16px;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.2; }
+  50% { opacity: 1; }
+  100% { opacity: 0.2; }
+}
+
 .client-id {
   font-family: ui-monospace, monospace;
   font-size: 14px;

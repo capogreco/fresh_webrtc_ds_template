@@ -197,6 +197,7 @@ export default function WebRTC() {
         type: "audio_state",
         isMuted: true, // Audio is muted
         audioState: "disabled",
+        pendingNote: isNoteActive.value // Let controller know if there's a pending note
       }));
       addLog("Sent audio state to controller (audio not enabled)");
     } catch (error) {
@@ -382,6 +383,23 @@ export default function WebRTC() {
               addLog(
                 `Playing note ${currentNote.value} (${frequency.value}Hz) due to controller setting`,
               );
+            } else if (isNoteActive.value && (isMuted.value || !audioContext)) {
+              // If muted or no audio context, just log the note request and notify controller
+              addLog(`Note ${currentNote.value} requested but audio not enabled`);
+              
+              // Let controller know that audio is muted but note is pending
+              if (channel.readyState === "open") {
+                try {
+                  channel.send(JSON.stringify({
+                    type: "audio_state",
+                    isMuted: true,
+                    audioState: "disabled",
+                    pendingNote: true
+                  }));
+                } catch (error) {
+                  console.error("Error sending audio state:", error);
+                }
+              }
             }
           }
 
@@ -400,14 +418,35 @@ export default function WebRTC() {
         // Handle note_on messages
         if (message.type === "note_on") {
           if (message.frequency) {
-            // Initialize audio if needed
-            if (!audioContext) {
-              initAudioContext();
-            }
-
-            // Play note at the specified frequency
-            noteOn(message.frequency);
+            // Update the frequency value
+            frequency.value = message.frequency;
+            currentNote.value = frequencyToNote(message.frequency);
+            
+            // Always update state to track that note should be on
             isNoteActive.value = true;
+            
+            // Only play sound if audio is already initialized
+            if (audioContext && !isMuted.value) {
+              noteOn(message.frequency);
+              addLog(`Playing note ${currentNote.value} (${frequency.value}Hz)`);
+            } else {
+              // If audio not enabled, just log the message and notify controller
+              addLog(`Note ${currentNote.value} requested but audio not enabled`);
+              
+              // Let controller know that audio is muted
+              if (channel.readyState === "open") {
+                try {
+                  channel.send(JSON.stringify({
+                    type: "audio_state",
+                    isMuted: true,
+                    audioState: "disabled",
+                    pendingNote: true
+                  }));
+                } catch (error) {
+                  console.error("Error sending audio state:", error);
+                }
+              }
+            }
           }
           return;
         }
@@ -981,11 +1020,14 @@ export default function WebRTC() {
           type: "audio_state",
           isMuted: isMuted.value,
           audioState: audioState.value,
+          pendingNote: false, // No pending notes when audio is enabled
+          isNoteActive: isNoteActive.value // Current note state
         }));
         console.log(
           "Sent audio state update:",
           isMuted.value ? "muted" : "unmuted",
           audioState.value,
+          isNoteActive.value ? "note active" : "note inactive"
         );
       } catch (error) {
         console.error("Error sending audio state:", error);
@@ -1001,6 +1043,9 @@ export default function WebRTC() {
         audioContext =
           new (window.AudioContext || (window as any).webkitAudioContext)();
         addLog("Audio context created");
+          
+        // Track previous audio state
+        const wasNoteActive = isNoteActive.value;
 
         // Create audio processing chain:
         // Oscillator -> Vibrato -> Filter -> GainNode (volume) -> Destination
@@ -1142,14 +1187,14 @@ export default function WebRTC() {
       isMuted.value = false; // Not muted = audio enabled
       showAudioButton.value = false;
 
-      // If the controller has already set Note On, play a note immediately
+      // If the controller had already set Note On, play a note immediately
       // This ensures immediate sound after enabling audio if Note On is selected
-      if (isNoteActive.value) {
+      if (wasNoteActive || isNoteActive.value) {
         console.log(
           "[SYNTH] Auto-playing note because controller has Note On selected",
         );
         noteOn(frequency.value);
-        addLog(`Auto-playing note ${currentNote.value} (${frequency.value}Hz)`);
+        addLog(`Auto-playing note ${currentNote.value} (${frequency.value}Hz) after enabling audio`);
       }
 
       // Send audio state to controller if connected

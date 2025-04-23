@@ -21,6 +21,8 @@ export interface SynthClient {
   isMuted?: boolean;
   /** Additional audio state info (running, suspended, etc.) */
   audioState?: string;
+  /** Whether a note is pending activation as soon as audio is enabled */
+  pendingNote?: boolean;
   /** Whether the connection has been verified by direct ping/pong */
   verifiedConnection?: boolean;
   /* Connection state is now verified directly by the controller */

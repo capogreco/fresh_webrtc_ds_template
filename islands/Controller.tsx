@@ -2282,10 +2282,14 @@ export default function Controller({ user }: ControllerProps) {
                               class={`audio-status-indicator ${
                                 !client.isMuted
                                   ? "audio-enabled"
+                                  : client.pendingNote
+                                  ? "audio-pending-note"
                                   : "audio-disabled"
                               }`}
                               title={!client.isMuted
                                 ? `Audio ${client.audioState || "enabled"}`
+                                : client.pendingNote
+                                ? "Audio muted (note pending)"
                                 : "Audio muted"}
                             >
                               {!client.isMuted
