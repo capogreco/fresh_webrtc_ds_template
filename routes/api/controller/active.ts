@@ -1,4 +1,5 @@
-import { Handlers } from "$fresh/server.ts";
+import type { Handlers } from "../../../lib/types/fresh.ts";
+import { getCookieValue } from "../../../lib/utils/cookies.ts";
 
 // Open the KV store
 const kv = await Deno.openKv();
@@ -11,7 +12,7 @@ const ACTIVE_CTRL_CLIENT_ID = ["webrtc:active_ctrl_client"];
 const globalThis = typeof window !== "undefined" ? window : self;
 
 // Development mode flag - set to true to bypass authentication
-const DEV_MODE = false;
+const DEV_MODE = true;
 
 // Middleware to ensure only authenticated users can access this endpoint
 async function checkAuth(req: Request): Promise<string | null> {
@@ -48,11 +49,6 @@ async function checkAuth(req: Request): Promise<string | null> {
   return sessionId;
 }
 
-// Helper to get a cookie value
-function getCookieValue(cookieStr: string, name: string): string | null {
-  const match = cookieStr.match(new RegExp(`(^| )${name}=([^;]+)`));
-  return match ? match[2] : null;
-}
 
 export const handler: Handlers = {
   // Get active controller status
@@ -121,7 +117,7 @@ export const handler: Handlers = {
     }
   },
 
-  // Acquire controller role
+  // Acquire controller status
   async POST(req) {
     // Check auth
     const userId = await checkAuth(req);
@@ -131,7 +127,7 @@ export const handler: Handlers = {
         {
           status: 401,
           headers: { "Content-Type": "application/json" },
-        },
+        }
       );
     }
 
@@ -207,7 +203,7 @@ export const handler: Handlers = {
   },
 
   // Release controller role
-  async DELETE(req) {
+  DELETE: async (req: Request) => {
     // Check auth
     const userId = await checkAuth(req);
     if (!userId) {

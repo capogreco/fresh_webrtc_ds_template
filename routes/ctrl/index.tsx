@@ -1,7 +1,8 @@
-import { Handlers, PageProps } from "$fresh/server.ts";
+import type { Handlers, PageProps } from "../../lib/types/fresh.ts";
 import { OAuth2Client } from "https://deno.land/x/oauth2_client@v1.0.2/mod.ts";
 import Controller from "../../islands/Controller.tsx";
 import KickControllerButton from "../../islands/KickControllerButton.tsx";
+import { getCookieValue } from "../../lib/utils/cookies.ts";
 
 // OAuth configuration
 // Manually construct Google OAuth URL function to avoid stringify issues
@@ -84,11 +85,6 @@ try {
 // Key for storing the active controller client ID
 const ACTIVE_CTRL_CLIENT_ID = ["webrtc:active_ctrl_client"];
 
-// Helper to get a cookie value
-function getCookieValue(cookieStr: string, name: string): string | null {
-  const match = cookieStr.match(new RegExp(`(^| )${name}=([^;]+)`));
-  return match ? match[2] : null;
-}
 
 export const handler: Handlers = {
   async GET(req, ctx) {

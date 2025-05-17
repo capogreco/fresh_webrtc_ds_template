@@ -1,14 +1,14 @@
-import { Handlers } from "$fresh/server.ts";
-import { ulid } from "https://deno.land/x/ulid@v0.3.0/mod.ts";
+import type { Handlers } from "../../lib/types/fresh.ts";
+import { ulid } from "../../lib/utils/ulid.ts";
+import { MESSAGE_TTL_MS, MESSAGE_KEY_PREFIX, queueMessage, deliverQueuedMessages } from "../../lib/utils/signaling.ts";
 
 // Open the KV store (used for message buffering and controller registration)
 const kv = await Deno.openKv();
 
 // Message queue TTL - messages expire after 5 minutes
-const MESSAGE_TTL_MS = 1000 * 60 * 5;
+// (imported from signaling utilities)
 
-// Key prefixes for KV store
-const MESSAGE_KEY_PREFIX = ["webrtc", "messages"];
+// Key prefixes for KV store (imported from signaling utilities)
 const CONTROLLER_KEY = ["webrtc:active_ctrl_client"]; // Use the same key as in active.ts
 
 // Active WebSocket connections (in-memory per instance)
@@ -48,49 +48,7 @@ async function getActiveController(): Promise<string | null> {
   return controller.value || null;
 }
 
-/**
- * Queue a message for a peer that is currently offline
- * Messages are stored with TTL and delivered when the peer connects
- */
-async function queueMessage(
-  targetId: string,
-  message: Record<string, unknown>,
-) {
-  const messageId = ulid();
-  const messagesKey = [...MESSAGE_KEY_PREFIX, targetId, messageId];
 
-  // Store message with TTL - automatically expires if not delivered
-  await kv.set(messagesKey, message, { expireIn: MESSAGE_TTL_MS });
-  console.log(`Message queued for ${targetId}`);
-}
-
-/**
- * Process any queued messages for a peer that just connected
- */
-async function deliverQueuedMessages(clientId: string, socket: WebSocket) {
-  try {
-    const prefix = [...MESSAGE_KEY_PREFIX, clientId];
-    const messagesIterator = kv.list({ prefix });
-
-    let count = 0;
-    for await (const entry of messagesIterator) {
-      // Deliver the message
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(entry.value));
-        count++;
-      }
-
-      // Delete the message from the queue
-      await kv.delete(entry.key);
-    }
-
-    if (count > 0) {
-      console.log(`Delivered ${count} queued messages to ${clientId}`);
-    }
-  } catch (error) {
-    console.error(`Error delivering queued messages to ${clientId}:`, error);
-  }
-}
 
 // Make functions available to other modules via global object
 // @ts-ignore - accessing global in Deno
@@ -137,6 +95,12 @@ export const handler: Handlers = {
 
         switch (message.type) {
           case "register":
+            // Ensure clientId is present for registration
+            if (!message.id) {
+              console.error("Registration message missing ID:", message);
+              socket.send(JSON.stringify({ type: "error", message: "Registration requires an ID." }));
+              return;
+            }
             // Register the client with its ID
             clientId = message.id;
             activeConnections.set(clientId, socket);
@@ -151,7 +115,7 @@ export const handler: Handlers = {
             }
 
             // Deliver any queued messages immediately
-            await deliverQueuedMessages(clientId, socket);
+            await deliverQueuedMessages(kv, clientId, socket);
             break;
 
           case "get-controller":
@@ -224,7 +188,7 @@ export const handler: Handlers = {
               console.log(
                 `SIGNAL: Target ${kickTargetId} not connected, queuing kick message`,
               );
-              await queueMessage(kickTargetId, kickMessage);
+              await queueMessage(kv, kickTargetId, kickMessage);
               console.log(
                 `SIGNAL: Queued controller-kicked for ${kickTargetId}`,
               );
@@ -270,7 +234,7 @@ export const handler: Handlers = {
               console.log(
                 `SIGNAL: Target ${targetId} not connected, queuing message`,
               );
-              await queueMessage(targetId, signalMessage);
+              await queueMessage(kv, targetId, signalMessage);
               console.log(`SIGNAL: Queued ${message.type} for ${targetId}`);
             }
             break;

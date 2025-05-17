@@ -12,6 +12,7 @@ import {
   SynthParams,
 } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
+import { fetchIceServers, DEFAULT_FALLBACK_ICE_SERVERS } from "../lib/webrtc.ts";
 import { Signal } from "@preact/signals";
 
 // Extend the window object for Web Audio API
@@ -598,25 +599,6 @@ export default function WebRTC() {
     await initRTC();
   };
 
-  // Fetch ICE servers from Twilio
-  const fetchIceServers = async () => {
-    try {
-      const response = await fetch("/api/twilio-ice");
-      if (!response.ok) {
-        console.error("Failed to fetch ICE servers from Twilio");
-        // Fallback to Google's STUN server
-        return [{ urls: "stun:stun.l.google.com:19302" }];
-      }
-
-      const data = await response.json();
-      console.log("Retrieved ICE servers from Twilio:", data.iceServers);
-      return data.iceServers;
-    } catch (error) {
-      console.error("Error fetching ICE servers:", error);
-      // Fallback to Google's STUN server
-      return [{ urls: "stun:stun.l.google.com:19302" }];
-    }
-  };
 
   // Initialize the WebRTC connection
   const initRTC = async () => {
@@ -628,6 +610,13 @@ export default function WebRTC() {
       iceServers,
     });
     connection.value = peerConnection;
+    // Log connection and ICE state changes for debugging
+    peerConnection.oniceconnectionstatechange = () => {
+      addLog(`ICE connection state: ${peerConnection.iceConnectionState}`);
+    };
+    peerConnection.onconnectionstatechange = () => {
+      addLog(`Connection state: ${peerConnection.connectionState}`);
+    };
 
     // Create data channel
     const channel = peerConnection.createDataChannel("dataChannel");

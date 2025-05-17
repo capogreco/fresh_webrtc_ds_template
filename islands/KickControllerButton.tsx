@@ -79,6 +79,7 @@ export default function KickControllerButton(
       // 1. Force the deactivation of the current controller
       const kickResponse = await fetch("/api/controller/active", {
         method: "DELETE",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           force: true,
@@ -99,6 +100,7 @@ export default function KickControllerButton(
       // 2. Register as the new active controller
       const activateResponse = await fetch("/api/controller/active", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           controllerClientId: clientId,

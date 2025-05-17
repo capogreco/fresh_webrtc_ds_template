@@ -1776,158 +1776,153 @@ export default function Controller({ user, clientId }: ControllerProps) {
   };
 
   // Connect to WebSocket for signaling only
-  const connectWebSocket = () => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/api/signal`);
-    socket.value = ws;
+  const connectWebSocket = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}/api/signal`;
+      addLog(`Attempting to connect to WebSocket: ${wsUrl}`);
+      const ws = new WebSocket(wsUrl);
 
-    ws.onopen = () => {
-      addLog("Signaling server connected");
-      ws.send(JSON.stringify({
-        type: "register",
-        id: id.value,
-      }));
-
-      // Simple heartbeat to keep connection alive
-      if (heartbeatInterval.value === null) {
-        heartbeatInterval.value = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: "heartbeat",
-            }));
+      ws.onopen = () => {
+        socket.value = ws; // Assign to signal now that WebSocket is open
+        addLog(`Signaling server connected (WebSocket opened to ${wsUrl}). Registering with ID: ${id.value || "undefined!"}`);
+        try {
+          if (typeof id.value !== "string" || id.value === "") {
+            addLog(`[WARNING] Attempting to register with an invalid ID: '${id.value}' (type: ${typeof id.value})`);
+            // Optionally, reject or throw an error if id.value is truly invalid
+            // For now, we proceed, and the server-side check (if implemented) should catch it.
           }
-        }, 30000) as unknown as number; // Simple heartbeat every 30 seconds
-      }
-    };
+          ws.send(JSON.stringify({
+            type: "register",
+            id: id.value,
+          }));
+          addLog(`Sent register message with ID: ${id.value}`);
 
-    ws.onclose = () => {
-      addLog("Signaling server disconnected");
-
-      // Clear heartbeat interval
-      if (heartbeatInterval.value !== null) {
-        clearInterval(heartbeatInterval.value);
-        heartbeatInterval.value = null;
-      }
-
-      // Reconnect unless we deliberately closed
-      if (!socket.value) {
-        setTimeout(connectWebSocket, 1000);
-      }
-    };
-
-    ws.onerror = (error) => {
-      addLog(`WebSocket error. Will try to reconnect...`);
-      console.error("WebSocket error:", error);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-
-        switch (message.type) {
-          // Handle controller-kicked message
-          case "controller-kicked":
-            addLog(
-              `You have been kicked as controller. New controller: ${message.newControllerId}`,
-            );
-            console.log(
-              `Received controller-kicked message. New controller: ${message.newControllerId}`,
-            );
-
-            // Send handoff message to all connected synth clients
-            handleControllerKicked(message.newControllerId);
-            break;
-
-          // In stateless signaling, there are only WebRTC signaling messages
-          // All other client management is done manually
-
-          case "offer":
-            // Handle offers from clients trying to connect to us
-            addLog(`Received offer from ${message.source}`);
-
-            // Check if this client exists in our list
-            if (!clients.value.has(message.source)) {
-              // Add the client if it doesn't exist
-              addLog(`Adding new client ${message.source} from offer`);
-              const newClient: SynthClient = {
-                id: message.source,
-                connected: false,
-                lastSeen: Date.now(),
-                synthParams: { ...DEFAULT_SYNTH_PARAMS },
-              };
-
-              const updatedClients = new Map(clients.value);
-              updatedClients.set(message.source, newClient);
-              clients.value = updatedClients;
-            }
-
-            // Handle the offer asynchronously
-            (async () => {
-              try {
-                await handleClientOffer(message);
-              } catch (error) {
-                console.error(
-                  `Error handling offer from ${message.source}:`,
-                  error,
-                );
-                addLog(`Error handling offer: ${error.message}`);
+          // Start heartbeat AFTER successful open and registration message sent
+          if (heartbeatInterval.value === null) {
+            addLog("Starting WebSocket heartbeat interval.");
+            heartbeatInterval.value = setInterval(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "heartbeat" }));
+              } else {
+                addLog("Heartbeat: WebSocket not open, skipping send.");
               }
-            })();
-            break;
-
-          case "answer":
-            // Handle answer from a client we sent an offer to
-            const answerConnection = connections.value.get(message.source);
-            if (answerConnection && answerConnection.peerConnection) {
-              answerConnection.peerConnection.setRemoteDescription(
-                new RTCSessionDescription(message.data),
-              )
-                .then(() =>
-                  addLog(`Remote description set for ${message.source}`)
-                )
-                .catch((error) =>
-                  addLog(`Error setting remote description: ${error}`)
-                );
-            }
-            break;
-
-          case "ice-candidate":
-            // Handle ICE candidate from any client
-            const iceConnection = connections.value.get(message.source);
-            if (iceConnection && iceConnection.peerConnection) {
-              iceConnection.peerConnection.addIceCandidate(
-                new RTCIceCandidate(message.data),
-              )
-                .then(() =>
-                  addLog(`Added ICE candidate from ${message.source}`)
-                )
-                .catch((error) =>
-                  addLog(`Error adding ICE candidate: ${error}`)
-                );
-            }
-            break;
-
-          case "controller-replaced":
-            // This controller has been replaced by another controller
-            addLog(
-              `You have been replaced as active controller by ${message.newControllerId}`,
-            );
-            // Deactivate controller and clean up
-            deactivateController(true);
-            break;
-
-          // client-status-update has been removed
-          // The controller now verifies connection status directly through ping/pong messaging
-          // and does not rely on client self-reporting
-
-          default:
-            addLog(`Unknown message type: ${message.type}`);
+            }, 30000) as unknown as number;
+          }
+          resolve(); // Resolve the promise here
+        } catch (sendError) {
+          console.error(`[Controller] Error sending register message to ${wsUrl}:`, sendError);
+          addLog(`Error during registration send: ${(sendError as Error).message}`);
+          reject(sendError);
         }
-      } catch (error) {
-        addLog(`Error handling message: ${error}`);
-      }
-    };
-  };
+      };
+
+      ws.onerror = (event) => {
+        console.error("[Controller] WebSocket error event:", event);
+        addLog(`WebSocket error. Check console for details.`);
+        if (socket.value === ws) { // If this was the active socket
+          socket.value = null;
+        }
+        // Clear heartbeat if it was running for this socket instance
+        if (heartbeatInterval.value !== null) {
+            clearInterval(heartbeatInterval.value);
+            heartbeatInterval.value = null;
+            addLog("Cleared heartbeat interval due to WebSocket error.");
+        }
+        reject(new Error("WebSocket connection error")); // Reject the promise for this connection attempt
+      };
+
+      ws.onclose = (event) => {
+        addLog(`WebSocket disconnected. Code: ${event.code}, Reason: '${event.reason || "N/A"}', Clean: ${event.wasClean}`);
+        if (socket.value === ws) { // If this was the active socket that closed
+          socket.value = null;
+        }
+        if (heartbeatInterval.value !== null) {
+          clearInterval(heartbeatInterval.value);
+          heartbeatInterval.value = null;
+          addLog("Cleared heartbeat interval due to WebSocket close.");
+        }
+        // Reconnection logic might be handled by initializeController's catch block or a dedicated manager
+        // Original had: if (!socket.value) { setTimeout(connectWebSocket, 1000); }
+        // This promise (for this specific connection attempt) should not re-resolve or re-reject on close
+        // if it has already resolved (onopen) or rejected (onerror).
+        // If the connection closes before 'onopen' or 'onerror', it might implicitly mean rejection.
+        // Browsers often fire 'onerror' then 'onclose' for failed connections.
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const messageData = event.data;
+          if (typeof messageData !== 'string') {
+            console.warn("[Controller] Received non-string WebSocket message:", messageData);
+            addLog("Received non-string WebSocket message.");
+            return;
+          }
+          const message = JSON.parse(messageData);
+
+          // Log raw message for debugging if needed
+          // console.log("[Controller] Raw message received:", message);
+
+          switch (message.type) {
+            case "controller-kicked":
+              addLog(`You have been kicked as controller. New controller: ${message.newControllerId}`);
+              console.log(`Received controller-kicked message. New controller: ${message.newControllerId}`);
+              handleControllerKicked(message.newControllerId);
+              break;
+            case "offer":
+              addLog(`Received offer from client: ${message.source}`);
+              if (!clients.value.has(message.source)) {
+                addLog(`Adding new client ${message.source} from offer`);
+                const newClient: SynthClient = {
+                  id: message.source,
+                  connected: false, // Will be true after successful WebRTC connection
+                  lastSeen: Date.now(),
+                  synthParams: { ...DEFAULT_SYNTH_PARAMS }, // Make sure DEFAULT_SYNTH_PARAMS is defined
+                  // latency and other fields can be added as connection progresses
+                };
+                const updatedClients = new Map(clients.value);
+                updatedClients.set(message.source, newClient);
+                clients.value = updatedClients;
+              }
+              (async () => {
+                try {
+                  await handleClientOffer(message); // Ensure handleClientOffer is defined and robust
+                } catch (offerError) {
+                  console.error(`[Controller] Error handling offer from ${message.source}:`, offerError);
+                  addLog(`Error handling offer from ${message.source}: ${(offerError as Error).message}`);
+                }
+              })();
+              break;
+            case "answer": // Assuming controller might receive answers if it initiates
+              addLog(`Received answer from ${message.source}`);
+              handleAnswerFromClient(message); // Implement this if needed
+              break;
+            case "ice-candidate":
+              addLog(`Received ICE candidate from ${message.source}`);
+              handleIceCandidateFromClient(message); // Implement this
+              break;
+            case "client-disconnected":
+              addLog(`Client ${message.clientId} reported disconnection.`);
+              // Handle client disconnection, e.g., update UI, clean up resources
+              removeClient(message.clientId);
+              break;
+            case "error": // Error messages from the server
+              console.error("[Controller] Received error message from server:", message.message, message.details || "");
+              addLog(`Server error: ${message.message} ${message.details || ""}`);
+              break;
+            default:
+              addLog(`Received unhandled WebSocket message type: ${message.type}`);
+              console.log("[Controller] Received unhandled WebSocket message:", message);
+          }
+        } catch (err) {
+          console.error("[Controller] Error processing WebSocket message:", err, "Raw data:", event.data);
+          addLog(`Error processing message: ${(err as Error).message}. Data: ${event.data}`);
+        }
+      };
+    }); // End of new Promise executor
+  }; // End of connectWebSocket function
+
+
 
   // Handle pressing Enter in the message input
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -1946,12 +1941,20 @@ export default function Controller({ user, clientId }: ControllerProps) {
       await connectWebSocket();
 
       // Register as active controller with the server
+      const requestBody: { controllerClientId: string; userId?: string } = {
+        controllerClientId: id.value,
+      };
+
+      // If in dev mode (identified by mock user id), add userId to body
+      // The 'user' prop is available from the component's props { user, clientId }
+      if (user && user.id === "dev-user-id") {
+        requestBody.userId = "dev-user-id";
+      }
+
       const response = await fetch("/api/controller/active", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          controllerClientId: id.value,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const result = await response.json();
@@ -2250,6 +2253,96 @@ export default function Controller({ user, clientId }: ControllerProps) {
 
     controlActive.value = false;
     addLog("Controller deactivated");
+  };
+
+  const handleAnswerFromClient = async (message: { source: string; data: RTCSessionDescriptionInit }) => {
+    const clientId = message.source;
+    const answer = message.data;
+    addLog(`Received answer from ${clientId}`);
+    const connection = connections.value.get(clientId);
+
+    if (connection && connection.peerConnection) {
+      if (connection.peerConnection.signalingState === "have-local-offer" || connection.peerConnection.signalingState === "stable") {
+        try {
+          await connection.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+          addLog(`Remote description (answer) set for ${clientId}`);
+        } catch (error) {
+          console.error(`[Controller] Error setting remote description for ${clientId}:`, error);
+          addLog(`Error setting remote description for ${clientId}: ${(error as Error).message}`);
+        }
+      } else {
+         console.warn(`[Controller] Received answer from ${clientId} but signaling state is ${connection.peerConnection.signalingState}. Ignoring answer.`);
+         addLog(`[Warning] Ignored answer from ${clientId} due to unexpected signaling state: ${connection.peerConnection.signalingState}`);
+      }
+    } else {
+      console.warn(`[Controller] Received answer from unknown or disconnected client ${clientId}`);
+      addLog(`[Warning] Received answer from unknown/disconnected client ${clientId}`);
+    }
+  };
+
+  const handleIceCandidateFromClient = async (message: { source: string; data: RTCIceCandidateInit }) => {
+    const clientId = message.source;
+    const candidate = message.data;
+    addLog(`Received ICE candidate from ${clientId}`);
+    const connection = connections.value.get(clientId);
+
+    if (connection && connection.peerConnection) {
+      try {
+        // Ensure candidate is not null or empty string before adding
+        if (candidate && (typeof candidate === 'object' || (typeof candidate === 'string' && candidate.length > 0))) {
+           await connection.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+           addLog(`Added ICE candidate from ${clientId}`);
+        } else {
+           addLog(`Received null or empty ICE candidate from ${clientId}. Ignoring.`);
+           console.warn(`[Controller] Received null or empty ICE candidate from ${clientId}`, candidate);
+        }
+      } catch (error) {
+        // Ignore benign errors if candidate is already added or connection is closed
+        if (connection.peerConnection.signalingState !== "closed") {
+           console.error(`[Controller] Error adding ICE candidate from ${clientId}:`, error);
+           addLog(`Error adding ICE candidate from ${clientId}: ${(error as Error).message}`);
+        }
+      }
+    } else {
+      console.warn(`[Controller] Received ICE candidate from unknown or disconnected client ${clientId}`);
+      addLog(`[Warning] Received ICE candidate from unknown/disconnected client ${clientId}`);
+    }
+  };
+
+  const removeClient = (clientId: string) => {
+    addLog(`Client ${clientId} reported disconnected by server. Cleaning up.`);
+    
+    const connection = connections.value.get(clientId);
+    if (connection) {
+      if (connection.dataChannel && connection.dataChannel.readyState !== "closed") {
+        connection.dataChannel.close();
+      }
+      if (connection.peerConnection && connection.peerConnection.signalingState !== "closed") {
+        connection.peerConnection.close();
+      }
+      connections.value.delete(clientId);
+      connections.value = new Map(connections.value); // Trigger update
+    }
+
+    const clientData = clients.value.get(clientId);
+    if (clientData) {
+      clients.value.delete(clientId);
+      clients.value = new Map(clients.value); // Trigger update
+    }
+    
+    addLog(`Cleaned up resources for disconnected client ${clientId}`);
+    
+     // Optionally, report updated connections to server, though server initiated this.
+     // This might be redundant but ensures consistency if other controllers are present.
+      if (socket.value && socket.value.readyState === WebSocket.OPEN) {
+        const activeConnections = Array.from(connections.value.entries())
+          .filter(([_, conn]) => conn.connected) // This might now be empty for the removed client
+          .map(([id, _]) => id);
+        socket.value.send(JSON.stringify({
+          type: "controller-connections",
+          connections: activeConnections,
+        }));
+      }
   };
 
   // Wake lock sentinel reference

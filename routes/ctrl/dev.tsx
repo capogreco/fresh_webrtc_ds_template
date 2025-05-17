@@ -17,7 +17,7 @@ export default function ControllerDevPage() {
       >
         <strong>Development Mode</strong> - OAuth authentication bypassed
       </div>
-      <Controller user={mockUser} />
+      <Controller user={mockUser} clientId="dev-controller-id" />
     </div>
   );
 }
