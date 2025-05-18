@@ -1,5 +1,5 @@
 // Preact component
-import { useSignal } from "@preact/signals";
+import { useSignal, computed } from "@preact/signals";
 import { useCallback, useEffect, useMemo, useRef } from "preact/hooks";
 import { WebSocketMessage } from "./hooks/useWebSocketSignaling.ts";
 import {
@@ -14,6 +14,7 @@ import { ClientList } from "../components/controller/ClientList.tsx";
 import { LogDisplay } from "../components/controller/LogDisplay.tsx";
 import { BroadcastMessageForm } from "../components/controller/BroadcastMessageForm.tsx";
 import { AddClientForm } from "../components/controller/AddClientForm.tsx";
+import { ClientManagerProvider } from "../lib/contexts.ts";
 
 interface ControllerProps {
   user: {
@@ -28,7 +29,6 @@ export default function Controller({ user, clientId }: ControllerProps) {
   // Use the server-provided client ID
   const id = useSignal(clientId);
   const logs = useSignal<string[]>([]);
-  const controlActive = useSignal(false);
   const wakeLock = useSignal<WakeLockSentinel | null>(null);
   const _statusCheckInterval = useSignal<number | null>(null);
   const _otherController = useSignal<{ userId: string; name: string } | null>(
@@ -52,7 +52,6 @@ export default function Controller({ user, clientId }: ControllerProps) {
   // Internal logic for when controller is kicked - memoized
   const handleControllerKickedInternalLogic = useCallback(
     (newControllerId: string) => {
-      controlActive.value = false;
       addLog(`Controller kicked by ${newControllerId}`);
       clientManagerInstanceRef.current?.stopPinging();
       if (clientManagerInstanceRef.current) {
@@ -64,8 +63,8 @@ export default function Controller({ user, clientId }: ControllerProps) {
         );
       }
     },
-    [addLog, controlActive],
-  ); // controlActive signal ref is stable
+    [addLog],
+  );
 
   // Memoized callbacks for useWebSocketSignaling
   const onOfferReceivedCallback = useCallback(
@@ -134,6 +133,9 @@ export default function Controller({ user, clientId }: ControllerProps) {
     onClientDisconnected: onClientDisconnectedCallback,
     onServerError: onServerErrorCallback,
   });
+  
+  // Computed signal for controller active state
+  const controlActive = computed(() => wsSignal.isConnected.value);
 
   // Initialize client manager
   const memoizedWsSignalProp = useMemo(() => ({
@@ -190,7 +192,6 @@ export default function Controller({ user, clientId }: ControllerProps) {
     // Connect to WebSocket
     wsSignal.connect()
       .then(() => {
-        controlActive.value = true;
         addLog("Controller active and connected to signaling server");
 
         // Start regular pings to connected clients
@@ -243,27 +244,32 @@ export default function Controller({ user, clientId }: ControllerProps) {
         >
           {controlActive.value ? "Active" : "Inactive"}
         </div>
+        <div>
+          <strong>Connected Clients:</strong> {clientManagerInstanceRef.current?.connectedClientsCount.value ?? 0}
+        </div>
       </div>
 
-      <ClientList
-        clients={clientManagerInstanceRef.current?.clients.value ?? new Map()}
-        onConnect={clientManagerInstanceRef.current?.connectToClient ??
-          (() => {})}
-        onDisconnect={clientManagerInstanceRef.current?.disconnectFromClient ??
-          (() => {})}
-        onSynthParamChange={clientManagerInstanceRef.current
-          ?.updateClientSynthParam ?? (() => {})}
-      />
+      <ClientManagerProvider value={clientManagerInstanceRef.current}>
+        <ClientList
+          clients={clientManagerInstanceRef.current?.clients.value ?? new Map()}
+          onConnect={clientManagerInstanceRef.current?.connectToClient ??
+            (() => {})}
+          onDisconnect={clientManagerInstanceRef.current?.disconnectFromClient ??
+            (() => {})}
+          onSynthParamChange={clientManagerInstanceRef.current
+            ?.updateClientSynthParam ?? (() => {})}
+        />
 
-      <AddClientForm
-        onAddClient={handleAddClient}
-        disabled={!controlActive.value}
-      />
+        <AddClientForm
+          onAddClient={handleAddClient}
+          disabled={!controlActive.value}
+        />
 
-      <BroadcastMessageForm
-        onSend={handleBroadcastMessage}
-        disabled={!controlActive.value}
-      />
+        <BroadcastMessageForm
+          onSend={handleBroadcastMessage}
+          disabled={!controlActive.value}
+        />
+      </ClientManagerProvider>
 
       <LogDisplay logs={logs.value} />
     </div>

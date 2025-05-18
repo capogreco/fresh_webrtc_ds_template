@@ -1,4 +1,4 @@
-import { Signal, useSignal } from "@preact/signals";
+import { Signal, useSignal, computed } from "@preact/signals";
 import { useCallback, useEffect, useMemo, useRef } from "preact/hooks";
 import type { SynthClient } from "../../lib/types/client.ts";
 import {
@@ -17,6 +17,21 @@ export function useClientManager(
   const clients = useSignal<Map<string, SynthClient>>(new Map());
   const _pingInterval = useSignal<number | null>(null);
   const webRTCServiceRef = useRef<WebRTCService | null>(null);
+  
+  // Computed signal for connected clients count
+  const connectedClientsCount = computed(() => 
+    Array.from(clients.value.values()).filter(client => client.connected).length
+  );
+  
+  // Computed signal for connected clients list
+  const connectedClients = computed(() => 
+    Array.from(clients.value.entries())
+      .filter(([_, client]) => client.connected)
+      .reduce((map, [id, client]) => {
+        map.set(id, client);
+        return map;
+      }, new Map<string, SynthClient>())
+  );
 
   const handleConnectionStateChange = useCallback(
     (clientId: string, connected: boolean) => {
@@ -369,6 +384,8 @@ export function useClientManager(
 
   return useMemo(() => ({
     clients,
+    connectedClientsCount,
+    connectedClients,
     addClient,
     removeClient,
     connectToClient,
@@ -383,6 +400,8 @@ export function useClientManager(
     handleIceCandidateFromClient,
   }), [
     clients, // Signal itself is stable
+    connectedClientsCount, // Computed signal is stable
+    connectedClients, // Computed signal is stable
     addClient,
     removeClient,
     connectToClient,

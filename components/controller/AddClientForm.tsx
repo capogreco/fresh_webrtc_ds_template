@@ -1,5 +1,7 @@
 // Preact component
+import { h } from "preact";
 import { useSignal } from "@preact/signals";
+import { useClientManagerContext } from "../../lib/contexts.ts";
 
 interface AddClientFormProps {
   onAddClient: (clientId: string) => void;
@@ -7,9 +9,20 @@ interface AddClientFormProps {
 }
 
 export function AddClientForm({
-  onAddClient,
+  onAddClient: propAddClient,
   disabled = false,
 }: AddClientFormProps) {
+  // Try to use context, fall back to props if not available
+  let clientManager;
+  try {
+    clientManager = useClientManagerContext();
+  } catch (error) {
+    // Context not available, use props
+    clientManager = null;
+  }
+  
+  // Use context value if available, otherwise use prop
+  const onAddClient = clientManager?.addClient || propAddClient;
   const newClientId = useSignal("");
 
   const handleSubmit = (e: Event) => {

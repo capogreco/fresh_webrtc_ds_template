@@ -1,5 +1,7 @@
 // Preact component
+import { h } from "preact";
 import { useSignal } from "@preact/signals";
+import { useClientManagerContext } from "../../lib/contexts.ts";
 
 interface BroadcastMessageFormProps {
   onSend: (message: string) => void;
@@ -7,9 +9,20 @@ interface BroadcastMessageFormProps {
 }
 
 export function BroadcastMessageForm({
-  onSend,
+  onSend: propOnSend,
   disabled = false,
 }: BroadcastMessageFormProps) {
+  // Try to use context, fall back to props if not available
+  let clientManager;
+  try {
+    clientManager = useClientManagerContext();
+  } catch (error) {
+    // Context not available, use props
+    clientManager = null;
+  }
+  
+  // Use context value if available, otherwise use prop
+  const onSend = clientManager?.broadcastMessage || propOnSend;
   const messageText = useSignal("");
 
   const handleSubmit = (e: Event) => {
