@@ -1,17 +1,25 @@
 import { assertEquals } from "./asserts.ts";
 import {
-  queueMessage,
   deliverQueuedMessages,
   MESSAGE_KEY_PREFIX,
+  queueMessage,
 } from "../lib/utils/signaling.ts";
 
-// Fake KV namespace for testing
+// Simplified fake KV class for testing
 class FakeKV {
-  private store = new Map<string, any>();
-  async set(key: unknown[], value: unknown, opts?: any) {
+  private store = new Map<string, { value: unknown; opts?: unknown }>();
+
+  set(key: unknown[], value: unknown, opts?: unknown) {
     const k = JSON.stringify(key);
     this.store.set(k, { value, opts });
+    return Promise.resolve({ ok: true });
   }
+
+  get(key: unknown[]): Promise<{ value: unknown }> {
+    const k = JSON.stringify(key);
+    return Promise.resolve({ value: this.store.get(k)?.value });
+  }
+
   async *list({ prefix }: { prefix: unknown[] }) {
     for (const [k, v] of this.store.entries()) {
       const keyArr = JSON.parse(k);
@@ -23,9 +31,12 @@ class FakeKV {
       }
     }
   }
-  async delete(key: unknown[]) {
+
+  delete(key: unknown[]) {
     this.store.delete(JSON.stringify(key));
+    return Promise.resolve({ ok: true });
   }
+
   // helper to inspect internal store for tests
   entries() {
     return Array.from(this.store.entries());
@@ -42,9 +53,9 @@ class FakeSocket {
 }
 
 Deno.test("queueMessage stores message in KV with proper key prefix", async () => {
-  const kv = new FakeKV();
+  const kv = new FakeKV() as unknown as Deno.Kv;
   await queueMessage(kv, "client1", { foo: "bar" });
-  const entries = kv.entries();
+  const entries = (kv as unknown as FakeKV).entries();
   // Expect one entry
   assertEquals(entries.length, 1);
   const [keyStr, stored] = entries[0];
@@ -55,11 +66,11 @@ Deno.test("queueMessage stores message in KV with proper key prefix", async () =
   assertEquals(keyArr[2], "client1");
   // Message value matches
   // Use property check since assertEquals does strict comparison
-  assertEquals((stored.value as any).foo, "bar");
+  assertEquals((stored.value as { foo: string }).foo, "bar");
 });
 
 Deno.test("deliverQueuedMessages sends queued messages and deletes them", async () => {
-  const kv = new FakeKV();
+  const kv = new FakeKV() as unknown as Deno.Kv;
   const socket = new FakeSocket();
   // Pre-populate two messages
   await queueMessage(kv, "cliA", { a: 1 });
@@ -69,9 +80,10 @@ Deno.test("deliverQueuedMessages sends queued messages and deletes them", async 
   // Two messages should be sent
   assertEquals(socket.sent.length, 2);
   // After delivery, KV should be empty for that prefix
-  const remaining = kv.entries().filter(([k]) => {
+  const remaining = (kv as unknown as FakeKV).entries().filter(([k]) => {
     const keyArr = JSON.parse(k);
-    return keyArr[0] === MESSAGE_KEY_PREFIX[0] && keyArr[1] === MESSAGE_KEY_PREFIX[1];
+    return keyArr[0] === MESSAGE_KEY_PREFIX[0] &&
+      keyArr[1] === MESSAGE_KEY_PREFIX[1];
   });
   assertEquals(remaining.length, 0);
 });

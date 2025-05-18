@@ -23,7 +23,7 @@ declare global {
 const globalThis = typeof window !== "undefined" ? window : self;
 
 export const handler: Handlers = {
-  GET: async (req) => {
+  GET: (_req) => {
     try {
       // Try to access the active connections from the global object
       // @ts-ignore - accessing global in Deno
@@ -63,7 +63,9 @@ export const handler: Handlers = {
         JSON.stringify({
           success: false,
           error: "Failed to get active clients: " +
-            (error?.message || String(error)),
+            (error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error)),
         }),
         {
           status: 500,

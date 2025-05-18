@@ -18,6 +18,8 @@ import * as $index from "./routes/index.tsx";
 import * as $Controller from "./islands/Controller.tsx";
 import * as $KickControllerButton from "./islands/KickControllerButton.tsx";
 import * as $WebRTC from "./islands/WebRTC.tsx";
+import * as $hooks_useClientManager from "./islands/hooks/useClientManager.ts";
+import * as $hooks_useWebSocketSignaling from "./islands/hooks/useWebSocketSignaling.ts";
 import type { Manifest } from "$fresh/server.ts";
 
 const manifest = {
@@ -40,6 +42,8 @@ const manifest = {
     "./islands/Controller.tsx": $Controller,
     "./islands/KickControllerButton.tsx": $KickControllerButton,
     "./islands/WebRTC.tsx": $WebRTC,
+    "./islands/hooks/useClientManager.ts": $hooks_useClientManager,
+    "./islands/hooks/useWebSocketSignaling.ts": $hooks_useWebSocketSignaling,
   },
   baseUrl: import.meta.url,
 } satisfies Manifest;

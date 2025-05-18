@@ -4,14 +4,15 @@
  */
 
 // Type for the wake lock sentinel
-interface WakeLockSentinel extends EventTarget {
+export interface WakeLockSentinel extends EventTarget {
   release(): Promise<void>;
-  type: string;
-  onrelease: ((this: WakeLockSentinel, ev: Event) => any) | null;
+  type: "screen";
+  released: boolean;
+  onrelease: ((this: WakeLockSentinel, ev: Event) => void) | null;
 }
 
 // Type for the wake lock navigator API
-interface WakeLockNavigator extends Navigator {
+interface WakeLockAdditions {
   wakeLock?: {
     request(type: "screen"): Promise<WakeLockSentinel>;
   };
@@ -19,7 +20,7 @@ interface WakeLockNavigator extends Navigator {
 
 // Add wake lock types to the global object
 declare global {
-  interface Navigator extends WakeLockNavigator {}
+  interface Navigator extends WakeLockAdditions {}
 }
 
 /**
@@ -33,8 +34,7 @@ export async function requestWakeLock(): Promise<WakeLockSentinel | null> {
   }
 
   try {
-    const wakeLockSentinel = await (navigator as WakeLockNavigator).wakeLock
-      ?.request("screen");
+    const wakeLockSentinel = await navigator.wakeLock?.request("screen");
     console.log("Wake lock acquired");
     return wakeLockSentinel || null;
   } catch (err) {
@@ -71,7 +71,7 @@ export async function releaseWakeLock(
 export function setupWakeLockListeners(
   getWakeLock: () => WakeLockSentinel | null,
   setWakeLock: (lock: WakeLockSentinel | null) => void,
-): void {
+): () => void {
   // Reacquire wake lock when page becomes visible again
   document.addEventListener("visibilitychange", async () => {
     if (document.visibilityState === "visible" && getWakeLock() === null) {

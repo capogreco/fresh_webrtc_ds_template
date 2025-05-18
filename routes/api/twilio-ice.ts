@@ -11,7 +11,7 @@ const FALLBACK_ICE_SERVERS = [
 ];
 
 export const handler: Handlers = {
-  async GET(req) {
+  async GET(_req) {
     try {
       const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
       const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
@@ -34,7 +34,7 @@ export const handler: Handlers = {
       }
 
       // Create a timestamp that will be valid for TTL seconds
-      const timestamp = Math.floor(Date.now() / 1000) + TTL;
+      const _timestamp = Math.floor(Date.now() / 1000) + TTL;
 
       // Make a request to Twilio's API to get the TURN servers
       const twilioUrl =

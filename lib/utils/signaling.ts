@@ -1,3 +1,4 @@
+/// <reference lib="deno.unstable" />
 /**
  * Signaling utilities for message queuing and delivery
  */
@@ -14,11 +15,12 @@ export const MESSAGE_KEY_PREFIX = ["webrtc", "messages"];
  * @param message The message object to queue
  */
 export async function queueMessage(
-  kv: any,
+  kv: Deno.Kv,
   targetId: string,
   message: unknown,
 ) {
-  const messageId = Date.now().toString(36) + Math.random().toString(36).substring(2);
+  const messageId = Date.now().toString(36) +
+    Math.random().toString(36).substring(2);
   const messagesKey = [...MESSAGE_KEY_PREFIX, targetId, messageId];
   await kv.set(messagesKey, message, { expireIn: MESSAGE_TTL_MS });
 }
@@ -30,7 +32,7 @@ export async function queueMessage(
  * @param socket The WebSocket-like object with send() and readyState
  */
 export async function deliverQueuedMessages(
-  kv: any,
+  kv: Deno.Kv,
   clientId: string,
   socket: { send: (data: string) => void; readyState: number },
 ) {

@@ -3,9 +3,9 @@
  */
 
 /**
- * Default fallback ICE servers (Google STUN) if Twilio credentials are missing or error occurs
+ * Fetches ICE servers from the environment variable or uses a fallback.
  */
-export const DEFAULT_FALLBACK_ICE_SERVERS: any[] = [
+export const DEFAULT_FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun2.l.google.com:19302" },
@@ -18,21 +18,28 @@ export const DEFAULT_FALLBACK_ICE_SERVERS: any[] = [
  */
 export async function fetchIceServers(
   fetchImpl: typeof fetch = fetch,
-): Promise<any[]> {
+): Promise<RTCIceServer[]> {
   try {
     const response = await fetchImpl("/api/twilio-ice");
     if (!response.ok) {
-      console.warn("fetchIceServers: Non-ok response, using fallback ICE servers");
+      console.warn(
+        "fetchIceServers: Non-ok response, using fallback ICE servers",
+      );
       return DEFAULT_FALLBACK_ICE_SERVERS;
     }
     const data = await response.json();
     if (!data || !Array.isArray(data.iceServers)) {
-      console.warn("fetchIceServers: Invalid data format, using fallback ICE servers");
+      console.warn(
+        "fetchIceServers: Invalid data format, using fallback ICE servers",
+      );
       return DEFAULT_FALLBACK_ICE_SERVERS;
     }
     return data.iceServers;
   } catch (error) {
-    console.error("fetchIceServers: Error fetching ICE servers, using fallback:", error);
+    console.error(
+      "fetchIceServers: Error fetching ICE servers, using fallback:",
+      error,
+    );
     return DEFAULT_FALLBACK_ICE_SERVERS;
   }
 }

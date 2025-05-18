@@ -87,7 +87,10 @@ export const handler: Handlers = {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Failed to send message: " + (error?.message || String(error)),
+          error: "Failed to send message: " +
+            (error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error)),
         }),
         {
           status: 500,

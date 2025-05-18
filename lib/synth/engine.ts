@@ -45,6 +45,7 @@ export class SynthEngine {
     try {
       // Create audio context
       this.audioContext =
+        // deno-lint-ignore no-window, no-explicit-any
         new (window.AudioContext || (window as any).webkitAudioContext)();
 
       // Create nodes (but don't connect them yet)
@@ -54,8 +55,8 @@ export class SynthEngine {
       this.isMuted = false;
 
       return true;
-    } catch (error) {
-      console.error("Failed to initialize audio:", error);
+    } catch (_error) {
+      console.error("Failed to initialize audio:", _error);
       return false;
     }
   }
@@ -473,7 +474,7 @@ export class SynthEngine {
       try {
         this.oscillator.stop();
         this.oscillator.disconnect();
-      } catch (error) {
+      } catch (_error) {
         // Ignore errors during cleanup
       }
       this.oscillator = null;
@@ -484,7 +485,7 @@ export class SynthEngine {
       try {
         this.vibratoOsc.stop();
         this.vibratoOsc.disconnect();
-      } catch (error) {
+      } catch (_error) {
         // Ignore errors during cleanup
       }
       this.vibratoOsc = null;
@@ -494,7 +495,7 @@ export class SynthEngine {
     if (this.vibratoGain) {
       try {
         this.vibratoGain.disconnect();
-      } catch (error) {
+      } catch (_error) {
         // Ignore
       }
       this.vibratoGain = null;
@@ -503,7 +504,7 @@ export class SynthEngine {
     if (this.filterNode) {
       try {
         this.filterNode.disconnect();
-      } catch (error) {
+      } catch (_error) {
         // Ignore
       }
       this.filterNode = null;
@@ -512,7 +513,7 @@ export class SynthEngine {
     if (this.envelopeGain) {
       try {
         this.envelopeGain.disconnect();
-      } catch (error) {
+      } catch (_error) {
         // Ignore
       }
       this.envelopeGain = null;
@@ -521,7 +522,7 @@ export class SynthEngine {
     if (this.gainNode) {
       try {
         this.gainNode.disconnect();
-      } catch (error) {
+      } catch (_error) {
         // Ignore
       }
       this.gainNode = null;
@@ -531,7 +532,7 @@ export class SynthEngine {
     if (this.audioContext) {
       try {
         this.audioContext.close();
-      } catch (error) {
+      } catch (_error) {
         // Ignore
       }
       this.audioContext = null;

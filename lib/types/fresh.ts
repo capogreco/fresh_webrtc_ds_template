@@ -4,11 +4,11 @@
 /**
  * Handler map for HTTP methods
  */
-export type Handlers = Record<string, any>;
+export type Handlers = Record<string, unknown>;
 
 /**
  * Props passed to page components
  */
-export interface PageProps<T = any> {
+export interface PageProps<T = unknown> {
   data: T;
 }

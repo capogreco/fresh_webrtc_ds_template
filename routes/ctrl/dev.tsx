@@ -1,3 +1,4 @@
+// No need to import h when using automatic runtime in Fresh
 import Controller from "../../islands/Controller.tsx";
 
 // Simple development page that bypasses OAuth

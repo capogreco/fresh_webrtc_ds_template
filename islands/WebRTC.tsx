@@ -3,16 +3,16 @@ import { useEffect } from "preact/hooks";
 import {
   requestWakeLock,
   setupWakeLockListeners,
+  type WakeLockSentinel,
 } from "../lib/utils/wakeLock.ts";
 import {
   DEFAULT_SYNTH_PARAMS,
   frequencyToNote,
   noteToFrequency,
   PARAM_DESCRIPTORS,
-  SynthParams,
 } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
-import { fetchIceServers, DEFAULT_FALLBACK_ICE_SERVERS } from "../lib/webrtc.ts";
+import { fetchIceServers } from "../lib/webrtc.ts";
 import { Signal } from "@preact/signals";
 
 // Extend the window object for Web Audio API
@@ -23,8 +23,30 @@ declare global {
 }
 
 // Type definitions for abstracted functionality
-type ParamHandler = (value: any, source?: string) => void;
+type ParamHandler = (value: unknown, source?: string) => void;
 type MessageHandler = (event: MessageEvent, channel: RTCDataChannel) => void;
+
+// Specific types for signaling messages
+interface BaseSignalMessage {
+  source: string;
+  target?: string; // Controller messages often include a target
+  type: "offer" | "answer" | "ice-candidate"; // Literal types for discriminated union
+}
+
+interface OfferMessage extends BaseSignalMessage {
+  type: "offer";
+  data: RTCSessionDescriptionInit;
+}
+
+interface AnswerMessage extends BaseSignalMessage {
+  type: "answer";
+  data: RTCSessionDescriptionInit;
+}
+
+interface IceCandidateMessage extends BaseSignalMessage {
+  type: "ice-candidate";
+  data: RTCIceCandidateInit | null; // Candidate can be null to signal end
+}
 
 // Audio context for the synth
 let audioContext: AudioContext | null = null;
@@ -103,7 +125,7 @@ export default function WebRTC() {
   };
 
   // Utility for sending a parameter update to controller
-  const sendParamToController = (param: string, value: any) => {
+  const sendParamToController = (param: string, value: unknown) => {
     if (dataChannel.value && dataChannel.value.readyState === "open") {
       try {
         dataChannel.value.send(JSON.stringify({
@@ -599,7 +621,6 @@ export default function WebRTC() {
     await initRTC();
   };
 
-
   // Initialize the WebRTC connection
   const initRTC = async () => {
     // Get ICE servers from Twilio
@@ -810,7 +831,9 @@ export default function WebRTC() {
 
   // Connect to the WebSocket signaling server
   const connectWebSocket = () => {
+    // deno-lint-ignore no-window
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    // deno-lint-ignore no-window
     const ws = new WebSocket(`${protocol}//${window.location.host}/api/signal`);
     socket.value = ws;
 
@@ -922,7 +945,7 @@ export default function WebRTC() {
   };
 
   // Handle an incoming offer
-  const handleOffer = async (message: any) => {
+  const handleOffer = async (message: OfferMessage) => {
     console.log("Handling WebRTC offer from:", message.source, message);
 
     if (!connection.value) {
@@ -1011,7 +1034,7 @@ export default function WebRTC() {
   };
 
   // Handle an incoming answer
-  const handleAnswer = (message: any) => {
+  const handleAnswer = (message: AnswerMessage) => {
     console.log("Handling WebRTC answer from:", message.source, message);
 
     if (connection.value) {
@@ -1038,12 +1061,14 @@ export default function WebRTC() {
   };
 
   // Handle an incoming ICE candidate
-  const handleIceCandidate = (message: any) => {
+  const handleIceCandidate = (message: IceCandidateMessage) => {
     console.log("Handling ICE candidate from:", message.source, message);
 
     if (connection.value) {
       console.log("Adding ICE candidate to connection");
-      connection.value.addIceCandidate(new RTCIceCandidate(message.data))
+      connection.value.addIceCandidate(
+        message.data ? new RTCIceCandidate(message.data) : null,
+      )
         .then(() => {
           console.log("ICE candidate added successfully");
           addLog("Added ICE candidate");
@@ -1100,7 +1125,7 @@ export default function WebRTC() {
       // Create audio context if it doesn't exist
       if (!audioContext) {
         audioContext = new (globalThis.AudioContext ||
-          (globalThis as any).webkitAudioContext)();
+          (globalThis as unknown as Window).webkitAudioContext)();
         addLog("Audio context created");
 
         // Create audio processing chain:
@@ -1453,7 +1478,7 @@ export default function WebRTC() {
   // Note frequencies are now imported from the synth library
 
   // Convert note to frequency (for UI convenience)
-  const updateNoteByName = (note: string) => {
+  const _updateNoteByName = (note: string) => {
     // Get the frequency for this note from our mapping
     const newFrequency = noteToFrequency(note);
 
@@ -1948,7 +1973,7 @@ export default function WebRTC() {
   };
 
   // Wake lock sentinel reference
-  const wakeLock = useSignal<any>(null);
+  const wakeLock = useSignal<WakeLockSentinel | null>(null);
 
   // Connect to the signaling server on mount and clean up on unmount
   useEffect(() => {
@@ -2078,6 +2103,7 @@ export default function WebRTC() {
                   <div class="controller-available">
                     <p>Controller available: {activeController.value}</p>
                     <button
+                      type="button"
                       class="connect-button"
                       onClick={() =>
                         connectToController(activeController.value as string)}
@@ -2101,6 +2127,7 @@ export default function WebRTC() {
 
             <p>Click below to enable audio (you can connect without audio).</p>
             <button
+              type="button"
               onClick={initAudioContext}
               class="audio-button"
             >
@@ -2143,6 +2170,7 @@ export default function WebRTC() {
                 <div class="controller-status">
                   <span>Controller available: {activeController.value}</span>
                   <button
+                    type="button"
                     onClick={() =>
                       connectToController(activeController.value as string)}
                     class="auto-connect-button"
@@ -2241,6 +2269,7 @@ export default function WebRTC() {
               {connected.value
                 ? (
                   <button
+                    type="button"
                     onClick={() => disconnect(true)}
                     class="disconnect-button"
                   >
@@ -2248,7 +2277,11 @@ export default function WebRTC() {
                   </button>
                 )
                 : (
-                  <button onClick={connect} disabled={!targetId.value.trim()}>
+                  <button
+                    type="button"
+                    onClick={connect}
+                    disabled={!targetId.value.trim()}
+                  >
                     Connect
                   </button>
                 )}
@@ -2264,6 +2297,7 @@ export default function WebRTC() {
                 disabled={!connected.value}
               />
               <button
+                type="button"
                 onClick={sendMessage}
                 disabled={!connected.value || !message.value.trim()}
               >

@@ -3,7 +3,7 @@
  */
 
 // Import and re-export from the new synth library
-export {
+export type {
   AudioState,
   AudioStateMessage,
   OscillatorType,

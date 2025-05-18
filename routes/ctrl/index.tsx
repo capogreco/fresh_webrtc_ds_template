@@ -1,3 +1,4 @@
+// Preact component
 import type { Handlers, PageProps } from "../../lib/types/fresh.ts";
 import { OAuth2Client } from "https://deno.land/x/oauth2_client@v1.0.2/mod.ts";
 import Controller from "../../islands/Controller.tsx";
@@ -51,7 +52,7 @@ function getGoogleAuthUrl() {
 }
 
 // Initialize OAuth client safely
-let oauth2Client;
+let oauth2Client: OAuth2Client | null = null;
 try {
   oauth2Client = new OAuth2Client({
     clientId: Deno.env.get("GOOGLE_CLIENT_ID") || "",
@@ -70,12 +71,12 @@ try {
 }
 
 // Allowed email(s) that can access the controller
-const ALLOWED_EMAILS = [
+const _ALLOWED_EMAILS = [
   Deno.env.get("ALLOWED_EMAIL") || "your-email@example.com",
 ];
 
 // Controller lock in Deno KV - initialize safely
-let kv;
+let kv: Deno.Kv | null = null;
 try {
   kv = await Deno.openKv();
 } catch (error) {
@@ -85,9 +86,13 @@ try {
 // Key for storing the active controller client ID
 const ACTIVE_CTRL_CLIENT_ID = ["webrtc:active_ctrl_client"];
 
-
 export const handler: Handlers = {
-  async GET(req, ctx) {
+  async GET(
+    req: Request,
+    ctx: {
+      render: (data: unknown, options?: { headers?: Headers }) => Response;
+    },
+  ) {
     try {
       // Check URL for special parameters from kick controller redirect
       const url = new URL(req.url);
@@ -143,7 +148,10 @@ export const handler: Handlers = {
         console.error("Error accessing KV store:", error);
 
         // Check specifically for quota errors
-        if (error.message && error.message.includes("quota")) {
+        if (
+          error && typeof error === "object" && "message" in error &&
+          typeof error.message === "string" && error.message.includes("quota")
+        ) {
           console.log("KV quota exceeded, redirecting to dev controller");
           return new Response(null, {
             status: 302,
@@ -154,14 +162,21 @@ export const handler: Handlers = {
         return ctx.render({
           error:
             "Database access error. Using development version is recommended.",
-          details: error.message,
-          quotaExceeded: error.message.includes("quota"),
+          details: error && typeof error === "object" && "message" in error
+            ? error.message
+            : String(error),
+          quotaExceeded: error && typeof error === "object" &&
+            "message" in error && typeof error.message === "string" &&
+            error.message.includes("quota"),
         });
       }
 
       if (
         !sessionData || !sessionData.value ||
-        (sessionData.value.expiresAt < Date.now())
+        (sessionData.value && typeof sessionData.value === "object" &&
+          "expiresAt" in sessionData.value &&
+          typeof sessionData.value.expiresAt === "number" &&
+          sessionData.value.expiresAt < Date.now())
       ) {
         // Session is invalid or expired
         if (!oauth2Client) {
@@ -182,7 +197,9 @@ export const handler: Handlers = {
         console.log("Generated login URL (expired session):", loginUrl);
         console.log("Current oauth2Client config:", {
           clientId: Deno.env.get("GOOGLE_CLIENT_ID") ? "Set" : "Not set",
-          redirectUri: oauth2Client.redirectUri,
+          redirectUri: oauth2Client && "redirectUri" in oauth2Client
+            ? oauth2Client.redirectUri
+            : "unknown",
         });
 
         // Clear the invalid session cookie
@@ -244,8 +261,12 @@ export const handler: Handlers = {
       return ctx.render({
         error:
           "An error occurred while loading the controller page. Please try again later.",
-        details: error.message,
-        stack: error.stack,
+        details: error && typeof error === "object" && "message" in error
+          ? error.message
+          : String(error),
+        stack: error && typeof error === "object" && "stack" in error
+          ? error.stack
+          : undefined,
       });
     }
   },
@@ -253,12 +274,13 @@ export const handler: Handlers = {
 
 export default function ControllerPage({ data }: PageProps) {
   // Check for server error
-  if (data.error) {
+  if (data && typeof data === "object" && "error" in data) {
     return (
       <div class="container">
         <h1>Error</h1>
 
-        {data.quotaExceeded
+        {data && typeof data === "object" && "quotaExceeded" in data &&
+            data.quotaExceeded
           ? (
             <div style="background-color: #ffe8cc; color: #7d4a00; padding: 16px; border-radius: 4px; margin-bottom: 20px; border: 1px solid #ffb459;">
               <h3 style="margin-top: 0;">Deno KV Quota Exceeded</h3>
@@ -269,16 +291,28 @@ export default function ControllerPage({ data }: PageProps) {
               </p>
             </div>
           )
-          : <p>{data.error}</p>}
+          : (
+            <p>
+              {data && typeof data === "object" && "error" in data &&
+                  data.error !== undefined
+                ? String(data.error)
+                : "Unknown error"}
+            </p>
+          )}
 
-        {data.details && (
+        {data && typeof data === "object" && "details" in data &&
+          data.details && (
           <div style="margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 4px;">
             <p>
-              <strong>Details:</strong> {data.details}
+              <strong>Details:</strong>{" "}
+              {data && typeof data === "object" && "details" in data
+                ? data.details
+                : ""}
             </p>
-            {data.stack && (
+            {data && typeof data === "object" && "stack" in data &&
+              data.stack && (
               <pre style="margin-top: 10px; white-space: pre-wrap; overflow-x: auto; font-size: 12px; background-color: #f0f0f0; padding: 10px; border-radius: 4px;">
-                {data.stack}
+                {data && typeof data === "object" && "stack" in data ? data.stack : ""}
               </pre>
             )}
           </div>
@@ -316,12 +350,13 @@ export default function ControllerPage({ data }: PageProps) {
   }
 
   // Check if we need to show the login page
-  if (data.needsLogin) {
+  if (data && typeof data === "object" && "needsLogin" in data) {
     return (
       <div class="container" style="max-width: 500px; text-align: center;">
         <h1>WebRTC Controller Login</h1>
 
-        {data.sessionExpired
+        {data && typeof data === "object" && "sessionExpired" in data &&
+            data.sessionExpired
           ? (
             <div
               class="alert"
@@ -338,22 +373,16 @@ export default function ControllerPage({ data }: PageProps) {
           )}
 
         <div style="margin-top: 30px;">
-          {data.loginUrl
+          {data && typeof data === "object" && "loginUrl" in data &&
+              data.loginUrl
             ? (
               <a
-                href={data.loginUrl}
+                href={data && typeof data === "object" && "loginUrl" in data &&
+                    data.loginUrl
+                  ? String(data.loginUrl)
+                  : "#"}
                 class="activate-button"
                 style="text-decoration: none; display: inline-block;"
-                onClick={(e) => {
-                  // Check if loginUrl is missing or invalid
-                  if (!data.loginUrl || typeof data.loginUrl !== "string") {
-                    e.preventDefault();
-                    console.error("Invalid login URL:", data.loginUrl);
-                    alert(
-                      "Login URL is invalid. Please try refreshing the page.",
-                    );
-                  }
-                }}
               >
                 Login with Google
               </a>
@@ -378,13 +407,25 @@ export default function ControllerPage({ data }: PageProps) {
     );
   }
 
-  const {
-    user,
-    clientId,
-    isControllerActive,
-    isCurrentClient,
-    activeControllerClientId,
-  } = data;
+  // Extract data properties with type checking
+  const user = data && typeof data === "object" && "user" in data
+    ? data.user
+    : null;
+  const clientId = data && typeof data === "object" && "clientId" in data
+    ? data.clientId
+    : null;
+  const isControllerActive =
+    data && typeof data === "object" && "isControllerActive" in data
+      ? data.isControllerActive
+      : false;
+  const isCurrentClient =
+    data && typeof data === "object" && "isCurrentClient" in data
+      ? data.isCurrentClient
+      : false;
+  const activeControllerClientId =
+    data && typeof data === "object" && "activeControllerClientId" in data
+      ? data.activeControllerClientId
+      : null;
 
   // Make sure user object exists
   if (!user || typeof user !== "object") {
@@ -405,6 +446,23 @@ export default function ControllerPage({ data }: PageProps) {
     );
   }
 
+  // Ensure user has the correct shape
+  const typedUser = {
+    id: typeof user === "object" && "id" in user ? String(user.id) : "",
+    name: typeof user === "object" && "name" in user ? String(user.name) : "",
+    email: typeof user === "object" && "email" in user
+      ? String(user.email)
+      : "",
+  };
+
+  // Convert clientId to string
+  const typedClientId = clientId ? String(clientId) : "";
+
+  // Convert activeControllerClientId to string
+  const typedActiveControllerClientId = activeControllerClientId
+    ? String(activeControllerClientId)
+    : "";
+
   // If a controller is active and it's not this client
   if (isControllerActive && !isCurrentClient) {
     return (
@@ -415,14 +473,14 @@ export default function ControllerPage({ data }: PageProps) {
         </p>
         <div style="margin-top: 20px;">
           <KickControllerButton
-            user={user}
-            clientId={clientId}
-            activeControllerClientId={activeControllerClientId}
+            user={typedUser}
+            clientId={typedClientId}
+            activeControllerClientId={typedActiveControllerClientId}
           />
         </div>
       </div>
     );
   }
 
-  return <Controller user={user} clientId={clientId} />;
+  return <Controller user={typedUser} clientId={typedClientId} />;
 }

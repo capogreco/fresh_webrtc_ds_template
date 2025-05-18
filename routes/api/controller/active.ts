@@ -1,3 +1,4 @@
+/// <reference lib="deno.unstable" />
 import type { Handlers } from "../../../lib/types/fresh.ts";
 import { getCookieValue } from "../../../lib/utils/cookies.ts";
 
@@ -25,7 +26,7 @@ async function checkAuth(req: Request): Promise<string | null> {
       if (body.userId === "dev-user-id") {
         return "dev-user-id";
       }
-    } catch (e) {
+    } catch (_e) {
       // Parsing failed, continue with normal auth
     }
   }
@@ -41,7 +42,10 @@ async function checkAuth(req: Request): Promise<string | null> {
   // Verify session
   const session = await kv.get(["webrtc:sessions", sessionId]);
 
-  if (!session.value || session.value.expiresAt < Date.now()) {
+  if (
+    !session.value ||
+    (session.value as { expiresAt: number }).expiresAt < Date.now()
+  ) {
     return null;
   }
 
@@ -49,10 +53,9 @@ async function checkAuth(req: Request): Promise<string | null> {
   return sessionId;
 }
 
-
 export const handler: Handlers = {
   // Get active controller status
-  async GET(req) {
+  async GET(req: Request) {
     // Check auth
     const userId = await checkAuth(req);
     if (!userId) {
@@ -118,7 +121,7 @@ export const handler: Handlers = {
   },
 
   // Acquire controller status
-  async POST(req) {
+  async POST(req: Request) {
     // Check auth
     const userId = await checkAuth(req);
     if (!userId) {
@@ -127,7 +130,7 @@ export const handler: Handlers = {
         {
           status: 401,
           headers: { "Content-Type": "application/json" },
-        }
+        },
       );
     }
 
@@ -269,7 +272,7 @@ export const handler: Handlers = {
 
             // @ts-ignore - accessing global object property
             const signalState = globalThis.signalState;
-            let clientsData = { clients: [] };
+            const clientsData: { clients: string[] } = { clients: [] };
 
             if (signalState?.activeConnections) {
               clientsData.clients = Array.from(
@@ -280,7 +283,9 @@ export const handler: Handlers = {
             // Find the active controller in the signaling clients
             if (
               clientsData.clients &&
-              clientsData.clients.includes(activeClientId.value)
+              activeClientId.value && // Ensure activeClientId.value is not null
+              typeof activeClientId.value === "string" &&
+              clientsData.clients.includes(activeClientId.value as string)
             ) {
               // Direct access to the WebSocket for the kicked controller
               const kickedSocket = signalState?.activeConnections?.get(
@@ -298,9 +303,9 @@ export const handler: Handlers = {
                 console.log(
                   `Directly sent kick notification to controller ${activeClientId.value}`,
                 );
-              } else if (signalState?.queueMessage) {
+              } else if (signalState?.queueMessage && activeClientId.value) { // Check activeClientId.value
                 // Queue the message for delivery when the client reconnects
-                await signalState.queueMessage(activeClientId.value, {
+                await signalState.queueMessage(activeClientId.value as string, { // Now activeClientId.value is guaranteed to be a string
                   type: "controller-kicked",
                   newControllerId: newControllerClientId,
                   source: "system",
@@ -308,6 +313,11 @@ export const handler: Handlers = {
 
                 console.log(
                   `Queued kick notification for controller ${activeClientId.value}`,
+                );
+              } else if (signalState && "queueMessage" in signalState) {
+                // Log if we couldn't queue because activeClientId was null but queueMessage existed
+                console.log(
+                  `Could not queue kick notification for null active controller ID.`,
                 );
               }
             }

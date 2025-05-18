@@ -21,7 +21,7 @@ const ALLOWED_EMAILS = [
 ];
 
 // Open KV store - with error handling
-let kv;
+let kv: Deno.Kv | null = null;
 try {
   kv = await Deno.openKv();
 } catch (error) {
@@ -38,8 +38,10 @@ export const handler: Handlers = {
     console.log("Callback URL:", url.toString());
     console.log("URL search params:", url.search);
     console.log("OAuth client config:", {
-      clientId: oauth2Client.clientId ? "Set" : "Not set",
-      redirectUri: oauth2Client.redirectUri,
+      clientId: oauth2Client && "clientId" in oauth2Client ? "Set" : "Not set",
+      redirectUri: oauth2Client && "redirectUri" in oauth2Client
+        ? oauth2Client.redirectUri
+        : "Not set",
     });
 
     try {
@@ -104,7 +106,10 @@ export const handler: Handlers = {
         console.error("Error storing session in KV:", error);
 
         // If there's a KV error (like quota exceeded), redirect to dev version
-        if (error.message && error.message.includes("quota")) {
+        if (
+          error && typeof error === "object" && "message" in error &&
+          typeof error.message === "string" && error.message.includes("quota")
+        ) {
           console.log("KV quota exceeded, redirecting to dev controller");
           const headers = new Headers();
           headers.set("Location", "/ctrl/dev");
@@ -116,7 +121,11 @@ export const handler: Handlers = {
 
         // For other errors, show an error page
         return new Response(
-          `Authentication error: ${error.message}. <a href="/ctrl/dev">Try dev version</a>`,
+          `Authentication error: ${
+            error && typeof error === "object" && "message" in error
+              ? error.message
+              : String(error)
+          }. <a href="/ctrl/dev">Try dev version</a>`,
           {
             status: 500,
             headers: { "Content-Type": "text/html" },
@@ -142,7 +151,10 @@ export const handler: Handlers = {
       console.error("OAuth error:", error);
 
       // If it's a KV quota error specifically, mention it and provide the dev link
-      if (error.message && error.message.includes("quota")) {
+      if (
+        error && typeof error === "object" && "message" in error &&
+        typeof error.message === "string" && error.message.includes("quota")
+      ) {
         return new Response(
           `<h2>KV Quota Exceeded</h2>
            <p>The database read quota has been exceeded.</p>
@@ -160,7 +172,11 @@ export const handler: Handlers = {
       // For other errors, show a generic error with a link to the dev version
       return new Response(
         `<h2>Authentication Failed</h2>
-         <p>Error: ${error.message}</p>
+         <p>Error: ${
+          error && typeof error === "object" && "message" in error
+            ? error.message
+            : String(error)
+        }</p>
          <p><a href="/ctrl/dev">Try Development Version</a></p>`,
         {
           status: 500,

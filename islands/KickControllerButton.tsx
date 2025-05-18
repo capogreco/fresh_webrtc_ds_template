@@ -12,7 +12,11 @@ interface KickControllerButtonProps {
 }
 
 export default function KickControllerButton(
-  { _user, clientId, _activeControllerClientId }: KickControllerButtonProps,
+  {
+    user: _user,
+    clientId,
+    activeControllerClientId: _activeControllerClientId,
+  }: KickControllerButtonProps,
 ) {
   // Progress state (0-100)
   const kickProgress = useSignal(0);
