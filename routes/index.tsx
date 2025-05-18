@@ -17,16 +17,9 @@ export default function Home() {
           <a
             href="/ctrl/dev"
             class="nav-link"
-            style="font-size: 0.9em; padding: 8px 15px; background-color: #f0f0f0; border-radius: 4px; margin-right: 10px;"
-          >
-            Dev Controller
-          </a>
-          <a
-            href="/webrtc/demo"
-            class="nav-link"
             style="font-size: 0.9em; padding: 8px 15px; background-color: #f0f0f0; border-radius: 4px;"
           >
-            WebRTC Demo
+            Dev Controller
           </a>
         </div>
       )}

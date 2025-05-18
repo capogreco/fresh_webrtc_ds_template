@@ -59,12 +59,12 @@ export class AudioEngineService {
   private filterNode: BiquadFilterNode | null = null;
   private vibratoOsc: OscillatorNode | null = null;
   private vibratoGain: GainNode | null = null;
-  
+
   // Pink noise for volume check
   private pinkNoiseNode: AudioWorkletNode | null = null;
   private pinkNoiseGain: GainNode | null = null;
   private analyserNode: AnalyserNode | null = null;
-  
+
   // Audio state
   private isMuted: boolean = true;
   private isNoteActive: boolean = false;
@@ -80,12 +80,12 @@ export class AudioEngineService {
 
   constructor(
     logCallback: (message: string) => void = () => {},
-    initialParams: Partial<SynthParams> = {}
+    initialParams: Partial<SynthParams> = {},
   ) {
     this.logCallback = logCallback;
     this.params = {
       ...DEFAULT_SYNTH_PARAMS,
-      ...initialParams
+      ...initialParams,
     };
     this.currentNote = frequencyToNote(this.params.frequency);
   }
@@ -100,9 +100,11 @@ export class AudioEngineService {
       // Create audio context if it doesn't exist
       if (!this.audioContext) {
         this.log("[INIT_AUDIO] Creating AudioContext...");
-        this.audioContext = new (globalThis.AudioContext || 
+        this.audioContext = new (globalThis.AudioContext ||
           (globalThis as unknown as Window).webkitAudioContext)();
-        this.log(`[INIT_AUDIO] Audio context created. State: ${this.audioContext.state}`);
+        this.log(
+          `[INIT_AUDIO] Audio context created. State: ${this.audioContext.state}`,
+        );
 
         // Create the main audio nodes
         this.filterNode = this.audioContext.createBiquadFilter();
@@ -119,7 +121,7 @@ export class AudioEngineService {
         this.analyserNode = this.audioContext.createAnalyser();
         this.analyserNode.fftSize = 2048;
         this.gainNode.connect(this.analyserNode);
-        
+
         // Set up vibrato LFO
         this.setupVibrato();
 
@@ -133,7 +135,11 @@ export class AudioEngineService {
         await this.resumeAudioContext();
       }
     } catch (error) {
-      throw new AudioEngineError(`Failed to initialize audio context: ${error instanceof Error ? error.message : String(error)}`);
+      throw new AudioEngineError(
+        `Failed to initialize audio context: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -146,7 +152,11 @@ export class AudioEngineService {
         await this.audioContext.resume();
         this.log(`Audio context resumed. State: ${this.audioContext.state}`);
       } catch (error) {
-        throw new AudioEngineError(`Failed to resume audio context: ${error instanceof Error ? error.message : String(error)}`);
+        throw new AudioEngineError(
+          `Failed to resume audio context: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     }
   }
@@ -166,7 +176,8 @@ export class AudioEngineService {
     const semitoneRatio = Math.pow(2, 1 / 12);
     const semitoneAmount = this.params.vibratoWidth / 100;
     const baseFreq = 440; // Reference frequency
-    const vibratoAmount = baseFreq * (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
+    const vibratoAmount = baseFreq *
+      (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
     this.vibratoGain.gain.value = vibratoAmount;
 
     this.vibratoOsc.connect(this.vibratoGain);
@@ -180,11 +191,17 @@ export class AudioEngineService {
     if (!this.audioContext || this.workletLoaded) return;
 
     try {
-      await this.audioContext.audioWorklet.addModule("/ridge_rat_type2_pink_noise_processor.js");
+      await this.audioContext.audioWorklet.addModule(
+        "/ridge_rat_type2_pink_noise_processor.js",
+      );
       this.workletLoaded = true;
       this.log("Pink noise worklet loaded successfully");
     } catch (error) {
-      this.log(`Failed to load pink noise worklet: ${error instanceof Error ? error.message : String(error)}`);
+      this.log(
+        `Failed to load pink noise worklet: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
       // Continue without pink noise functionality
     }
   }
@@ -202,13 +219,16 @@ export class AudioEngineService {
       this.stopPinkNoise();
 
       // Create and connect the new pink noise node
-      this.pinkNoiseNode = new AudioWorkletNode(this.audioContext, "ridge-rat-type2-pink-noise-processor");
+      this.pinkNoiseNode = new AudioWorkletNode(
+        this.audioContext,
+        "ridge-rat-type2-pink-noise-generator",
+      );
       this.pinkNoiseGain = this.audioContext.createGain();
       this.pinkNoiseGain.gain.value = gain;
 
       this.pinkNoiseNode.connect(this.pinkNoiseGain);
       this.pinkNoiseGain.connect(this.audioContext.destination);
-      
+
       // Also connect to analyzer for visualization
       if (this.analyserNode) {
         this.pinkNoiseGain.connect(this.analyserNode);
@@ -216,7 +236,11 @@ export class AudioEngineService {
 
       this.log("Pink noise started for volume check");
     } catch (error) {
-      throw new AudioEngineError(`Failed to start pink noise: ${error instanceof Error ? error.message : String(error)}`);
+      throw new AudioEngineError(
+        `Failed to start pink noise: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -229,8 +253,14 @@ export class AudioEngineService {
         // Ramp down gain to avoid clicks
         if (this.pinkNoiseGain && this.audioContext) {
           const currentGain = this.pinkNoiseGain.gain.value;
-          this.pinkNoiseGain.gain.setValueAtTime(currentGain, this.audioContext.currentTime);
-          this.pinkNoiseGain.gain.linearRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.1);
+          this.pinkNoiseGain.gain.setValueAtTime(
+            currentGain,
+            this.audioContext.currentTime,
+          );
+          this.pinkNoiseGain.gain.linearRampToValueAtTime(
+            0.0001,
+            this.audioContext.currentTime + 0.1,
+          );
         }
 
         // Disconnect after a short delay
@@ -247,7 +277,11 @@ export class AudioEngineService {
 
         this.log("Pink noise stopped");
       } catch (error) {
-        this.log(`Error stopping pink noise: ${error instanceof Error ? error.message : String(error)}`);
+        this.log(
+          `Error stopping pink noise: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     }
   }
@@ -271,7 +305,11 @@ export class AudioEngineService {
    */
   public noteOn(frequency: number, forceTrigger: boolean = false): void {
     if (!this.audioContext || this.isMuted) {
-      this.log(`Cannot play note - audio context ${!this.audioContext ? 'not initialized' : 'muted'}`);
+      this.log(
+        `Cannot play note - audio context ${
+          !this.audioContext ? "not initialized" : "muted"
+        }`,
+      );
       return;
     }
 
@@ -310,11 +348,14 @@ export class AudioEngineService {
       if (portamentoTime > 0) {
         // Use exponential ramp for frequency changes (sounds more natural)
         this.oscillator.frequency.exponentialRampToValueAtTime(
-          frequency, 
-          this.audioContext.currentTime + portamentoTime
+          frequency,
+          this.audioContext.currentTime + portamentoTime,
         );
       } else {
-        this.oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
+        this.oscillator.frequency.setValueAtTime(
+          frequency,
+          this.audioContext.currentTime,
+        );
       }
     }
 
@@ -328,8 +369,8 @@ export class AudioEngineService {
       const attackTime = this.params.attack;
       if (attackTime > 0) {
         this.gainNode.gain.linearRampToValueAtTime(
-          this.params.volume, 
-          now + attackTime
+          this.params.volume,
+          now + attackTime,
         );
       } else {
         // Immediate attack
@@ -411,9 +452,14 @@ export class AudioEngineService {
         audioNode.setValueAtTime(currentValue, now);
 
         // Use exponential ramp for frequency (must be > 0) or linear ramp otherwise
-        if (useExponentialRamp && currentValue > 0 && (newValue as number) > 0) {
+        if (
+          useExponentialRamp && currentValue > 0 && (newValue as number) > 0
+        ) {
           // Exponential ramps sound more natural for frequency changes
-          audioNode.exponentialRampToValueAtTime(newValue as number, now + rampTime);
+          audioNode.exponentialRampToValueAtTime(
+            newValue as number,
+            now + rampTime,
+          );
         } else {
           // Linear ramp for other parameters or if values are zero/negative
           audioNode.linearRampToValueAtTime(newValue as number, now + rampTime);
@@ -554,7 +600,9 @@ export class AudioEngineService {
    * Set the filter resonance (Q)
    */
   public setFilterResonance(resonance: number): void {
-    const validResonance = PARAM_DESCRIPTORS.filterResonance.validate(resonance);
+    const validResonance = PARAM_DESCRIPTORS.filterResonance.validate(
+      resonance,
+    );
     this.params.filterResonance = validResonance;
 
     // Update the filter if it exists
@@ -599,7 +647,8 @@ export class AudioEngineService {
       const semitoneRatio = Math.pow(2, 1 / 12);
       const semitoneAmount = validWidth / 100;
       const baseFreq = 440; // Reference frequency
-      const vibratoAmount = baseFreq * (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
+      const vibratoAmount = baseFreq *
+        (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
 
       this.updateAudioParam({
         paramName: "Vibrato Width",
@@ -612,10 +661,22 @@ export class AudioEngineService {
 
       // Connect/disconnect vibrato based on width
       if (this.oscillator) {
-        if (validWidth > 0 && !this.oscillator.frequency.numberOfInputs) {
-          this.vibratoGain.connect(this.oscillator.frequency);
-        } else if (validWidth === 0 && this.oscillator.frequency.numberOfInputs) {
-          this.vibratoGain.disconnect(this.oscillator.frequency);
+        try {
+          if (validWidth > 0) {
+            // Connect vibrato if width is greater than 0
+            this.vibratoGain.connect(this.oscillator.frequency);
+          } else {
+            // Disconnect vibrato if width is 0
+            this.vibratoGain.disconnect(this.oscillator.frequency);
+          }
+        } catch (error) {
+          // Handle errors (usually happens when trying to connect already connected nodes)
+          // or disconnect from disconnected nodes
+          this.log(
+            `Vibrato connection error: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
       }
     }
@@ -637,13 +698,13 @@ export class AudioEngineService {
   public playNoteByName(note: string): void {
     // Get the frequency for this note from our mapping
     const noteFrequency = noteToFrequency(note);
-    
+
     // Update the note display
     this.currentNote = note;
-    
+
     // Play the note at the calculated frequency
     this.noteOn(noteFrequency);
-    
+
     this.log(`Playing note ${note} (${noteFrequency}Hz)`);
   }
 
@@ -652,7 +713,7 @@ export class AudioEngineService {
    */
   public setMuted(muted: boolean): void {
     this.isMuted = muted;
-    this.log(`Audio ${muted ? 'muted' : 'unmuted'}`);
+    this.log(`Audio ${muted ? "muted" : "unmuted"}`);
 
     // If unmuting and a note was active, restore it
     if (!muted && this.isNoteActive) {

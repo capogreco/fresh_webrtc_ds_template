@@ -13,11 +13,10 @@ import * as $ctrl_callback from "./routes/ctrl/callback.tsx";
 import * as $ctrl_dev from "./routes/ctrl/dev.tsx";
 import * as $ctrl_index from "./routes/ctrl/index.tsx";
 import * as $ctrl_logout from "./routes/ctrl/logout.tsx";
-import * as $greet_name_ from "./routes/greet/[name].tsx";
 import * as $index from "./routes/index.tsx";
-import * as $webrtc_demo from "./routes/webrtc/demo.tsx";
 import * as $Controller from "./islands/Controller.tsx";
 import * as $KickControllerButton from "./islands/KickControllerButton.tsx";
+import * as $Synth from "./islands/Synth.tsx";
 import * as $WebRTC from "./islands/WebRTC.tsx";
 import * as $hooks_useAudioEngine from "./islands/hooks/useAudioEngine.ts";
 import * as $hooks_useClientManager from "./islands/hooks/useClientManager.ts";
@@ -38,13 +37,12 @@ const manifest = {
     "./routes/ctrl/dev.tsx": $ctrl_dev,
     "./routes/ctrl/index.tsx": $ctrl_index,
     "./routes/ctrl/logout.tsx": $ctrl_logout,
-    "./routes/greet/[name].tsx": $greet_name_,
     "./routes/index.tsx": $index,
-    "./routes/webrtc/demo.tsx": $webrtc_demo,
   },
   islands: {
     "./islands/Controller.tsx": $Controller,
     "./islands/KickControllerButton.tsx": $KickControllerButton,
+    "./islands/Synth.tsx": $Synth,
     "./islands/WebRTC.tsx": $WebRTC,
     "./islands/hooks/useAudioEngine.ts": $hooks_useAudioEngine,
     "./islands/hooks/useClientManager.ts": $hooks_useClientManager,

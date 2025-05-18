@@ -1,10 +1,10 @@
 import { Signal, useSignal } from "@preact/signals";
 import { useCallback, useEffect } from "preact/hooks";
-import { 
+import {
+  AnswerMessage,
+  IceCandidateMessage,
+  OfferMessage,
   SignalingMessage,
-  OfferMessage, 
-  AnswerMessage, 
-  IceCandidateMessage 
 } from "./useWebRTCConnection.ts";
 
 // Types for messages
@@ -22,9 +22,23 @@ export interface UseWebSocketSignalingProps {
   controllerId?: Signal<string>; // Legacy support for old parameter name
   addLog: (logText: string) => void; // Callback to log messages in the parent component
   onSignalingMessage?: (message: SignalingMessage) => void; // General handler for all WebRTC signaling messages
-  onOfferReceived?: (message: { source: string; data: RTCSessionDescriptionInit; type: "offer" }) => void; // Legacy callback
-  onAnswerReceived?: (message: { source: string; data: RTCSessionDescriptionInit; type: "answer" }) => void; // Legacy callback
-  onIceCandidateReceived?: (message: { source: string; data: RTCIceCandidateInit; type: "ice-candidate" }) => void; // Legacy callback
+  onOfferReceived?: (
+    message: { source: string; data: RTCSessionDescriptionInit; type: "offer" },
+  ) => void; // Legacy callback
+  onAnswerReceived?: (
+    message: {
+      source: string;
+      data: RTCSessionDescriptionInit;
+      type: "answer";
+    },
+  ) => void; // Legacy callback
+  onIceCandidateReceived?: (
+    message: {
+      source: string;
+      data: RTCIceCandidateInit;
+      type: "ice-candidate";
+    },
+  ) => void; // Legacy callback
   onControllerKicked?: (newControllerId: string) => void;
   onClientDisconnected?: (clientId: string) => void;
   onServerError?: (errorMessage: string, details?: string) => void;
@@ -52,7 +66,7 @@ export function useWebSocketSignaling({
 }: UseWebSocketSignalingProps): UseWebSocketSignalingReturn {
   // Handle backward compatibility - use localId if provided, otherwise controllerId
   const effectiveId = localId || controllerId || useSignal("");
-    
+
   const socket = useSignal<WebSocket | null>(null);
   const isConnected = useSignal<boolean>(false);
   const heartbeatInterval = useSignal<number | null>(null);
@@ -98,24 +112,24 @@ export function useWebSocketSignaling({
 
         try {
           if (effectiveId.value === "") {
-              const errorMsg =
-                `[WebSocketHook] [CRITICAL] Registration aborted: Invalid or missing ID ('${effectiveId.value}') at the time of onopen. Closing WebSocket.`;
-              addLog(errorMsg);
-              console.error(errorMsg);
-              ws.close(1008, "Invalid ID for registration."); // 1008: Policy Violation
-              reject(
-                new Error("Invalid ID for registration at onopen."),
-              ); // Reject the connect promise
-              return; // Do not proceed to send
+            const errorMsg =
+              `[WebSocketHook] [CRITICAL] Registration aborted: Invalid or missing ID ('${effectiveId.value}') at the time of onopen. Closing WebSocket.`;
+            addLog(errorMsg);
+            console.error(errorMsg);
+            ws.close(1008, "Invalid ID for registration."); // 1008: Policy Violation
+            reject(
+              new Error("Invalid ID for registration at onopen."),
+            ); // Reject the connect promise
+            return; // Do not proceed to send
           }
 
           ws.send(JSON.stringify({
-              type: "register",
-              id: effectiveId.value,
-            }));
-            addLog(
-              `[WebSocketHook] Sent register message with ID: ${effectiveId.value}`,
-            );
+            type: "register",
+            id: effectiveId.value,
+          }));
+          addLog(
+            `[WebSocketHook] Sent register message with ID: ${effectiveId.value}`,
+          );
 
           if (heartbeatInterval.value !== null) {
             clearInterval(heartbeatInterval.value);
@@ -215,19 +229,38 @@ export function useWebSocketSignaling({
               addLog(
                 `[WebSocketHook] Received ${messageType} from: ${parsedMessage.source}`,
               );
-              
+
               // Forward to onSignalingMessage handler if provided
               if (onSignalingMessage) {
                 // Use the new handler if available
                 onSignalingMessage(parsedMessage as SignalingMessage);
-              }
-              // Also use legacy handlers if provided (for backward compatibility)
+              } // Also use legacy handlers if provided (for backward compatibility)
               else if (parsedMessage.type === "offer" && onOfferReceived) {
-                onOfferReceived(parsedMessage as { source: string; data: RTCSessionDescriptionInit; type: "offer" });
+                onOfferReceived(
+                  parsedMessage as {
+                    source: string;
+                    data: RTCSessionDescriptionInit;
+                    type: "offer";
+                  },
+                );
               } else if (parsedMessage.type === "answer" && onAnswerReceived) {
-                onAnswerReceived(parsedMessage as { source: string; data: RTCSessionDescriptionInit; type: "answer" });
-              } else if (parsedMessage.type === "ice-candidate" && onIceCandidateReceived) {
-                onIceCandidateReceived(parsedMessage as { source: string; data: RTCIceCandidateInit; type: "ice-candidate" });
+                onAnswerReceived(
+                  parsedMessage as {
+                    source: string;
+                    data: RTCSessionDescriptionInit;
+                    type: "answer";
+                  },
+                );
+              } else if (
+                parsedMessage.type === "ice-candidate" && onIceCandidateReceived
+              ) {
+                onIceCandidateReceived(
+                  parsedMessage as {
+                    source: string;
+                    data: RTCIceCandidateInit;
+                    type: "ice-candidate";
+                  },
+                );
               }
               break;
             case "client-disconnected":

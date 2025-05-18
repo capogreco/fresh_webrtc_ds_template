@@ -1,20 +1,16 @@
 import { useSignal } from "@preact/signals";
-import { useCallback, useEffect, useRef } from "preact/hooks";
+import { useCallback, useEffect } from "preact/hooks";
 import { h as _h } from "preact";
 import {
   requestWakeLock,
   setupWakeLockListeners,
   type WakeLockSentinel,
 } from "../lib/utils/wakeLock.ts";
-import {
-  DEFAULT_SYNTH_PARAMS,
-  frequencyToNote,
-  noteToFrequency,
-  PARAM_DESCRIPTORS,
-} from "../lib/synth/index.ts";
+import { PARAM_DESCRIPTORS } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
 import { fetchIceServers } from "../lib/webrtc.ts";
-import { Signal } from "@preact/signals";
+import { useAudioEngine } from "./hooks/useAudioEngine.ts";
+import Synth from "./Synth.tsx";
 
 // Extend the window object for Web Audio API
 declare global {
@@ -55,15 +51,7 @@ interface IceCandidateMessage extends BaseSignalMessage {
   data: RTCIceCandidateInit | null; // Candidate can be null to signal end
 }
 
-// Audio context for the synth
-let audioContext: AudioContext | null = null;
-let oscillator: OscillatorNode | null = null;
-let gainNode: GainNode | null = null;
-let filterNode: BiquadFilterNode | null = null;
-let vibratoOsc: OscillatorNode | null = null;
-let vibratoGain: GainNode | null = null;
-
-// Web Audio Synthesizer Nodes - using direct Web Audio API
+// Web Audio Synthesizer Nodes - now managed by useAudioEngine hook
 
 export default function WebRTC() {
   // State management
@@ -78,80 +66,9 @@ export default function WebRTC() {
   const activeController = useSignal<string | null>(null);
   const autoConnectAttempted = useSignal(false);
 
-  // Audio context state
-  const isMuted = useSignal(true); // Start muted
-  const audioState = useSignal<string>("suspended");
+  // UI control state
   const showAudioButton = useSignal(true); // Start by showing the enable audio button
-
-  // Pink noise state for volume adjustment
-  const pinkNoiseActive = useSignal(false);
-  const workletLoaded = useSignal(false);
-  const pinkNoiseSetupDone = useSignal(false);
-  const pinkNoiseNodeRef = useRef<AudioWorkletNode | null>(null);
-  const pinkNoiseGainRef = useRef<GainNode | null>(null);
-
-  // Synth parameters using the physics-based approach
-  const frequency = useSignal(DEFAULT_SYNTH_PARAMS.frequency);
-  const waveform = useSignal<OscillatorType>(DEFAULT_SYNTH_PARAMS.waveform);
-  const volume = useSignal(DEFAULT_SYNTH_PARAMS.volume);
-  const detune = useSignal(DEFAULT_SYNTH_PARAMS.detune);
-  const currentNote = useSignal(
-    frequencyToNote(DEFAULT_SYNTH_PARAMS.frequency),
-  ); // Derived value for display
-  const isNoteActive = useSignal(false); // Track if a note is currently playing
-
-  // New synth parameters
-  const attack = useSignal(DEFAULT_SYNTH_PARAMS.attack);
-  const release = useSignal(DEFAULT_SYNTH_PARAMS.release);
-  const filterCutoff = useSignal(DEFAULT_SYNTH_PARAMS.filterCutoff);
-  const filterResonance = useSignal(DEFAULT_SYNTH_PARAMS.filterResonance);
-  const vibratoRate = useSignal(DEFAULT_SYNTH_PARAMS.vibratoRate);
-  const vibratoWidth = useSignal(DEFAULT_SYNTH_PARAMS.vibratoWidth);
-  const portamentoTime = useSignal(DEFAULT_SYNTH_PARAMS.portamentoTime);
-
-  // Handler for when user finishes pink noise volume adjustment
-  const handleVolumeCheckDone = useCallback(() => {
-    if (pinkNoiseGainRef.current && audioContext) {
-      // Ramp down pink noise gain smoothly
-      const currentGain = pinkNoiseGainRef.current.gain.value;
-      pinkNoiseGainRef.current.gain.setValueAtTime(
-        currentGain,
-        audioContext.currentTime,
-      );
-      pinkNoiseGainRef.current.gain.linearRampToValueAtTime(
-        0.0001,
-        audioContext.currentTime + 0.1,
-      ); // Ramp to near zero
-    }
-    // Defer setting pinkNoiseActive to false to allow fade-out
-    setTimeout(() => {
-      pinkNoiseActive.value = false;
-      if (pinkNoiseGainRef.current) pinkNoiseGainRef.current.gain.value = 0; // Ensure it's fully zero
-    }, 150); // A bit longer than ramp time
-
-    pinkNoiseSetupDone.value = true;
-    showAudioButton.value = false; // Hide the enable audio button
-    isMuted.value = false; // Now enable main synth audio
-    addLog("Volume check done. Main synth audio enabled.");
-
-    const wasNoteActive = (globalThis as unknown as GlobalThisExtensions)
-      ._wasNoteActiveDuringAudioInit;
-    const freqAtInit =
-      (globalThis as unknown as GlobalThisExtensions)._frequencyAtAudioInit ||
-      DEFAULT_SYNTH_PARAMS.frequency;
-
-    // If a note was active (either from before init or set by controller during pink noise)
-    if (isNoteActive.value || wasNoteActive) {
-      if (audioContext && audioContext.state === "running") {
-        addLog("Restoring/triggering note after volume check.");
-        // If isNoteActive is true, use current frequency. If only wasNoteActive, use frequency at init.
-        // This covers case where controller turned note on/off during pink noise.
-        noteOn(isNoteActive.value ? frequency.value : freqAtInit, true);
-      }
-    }
-  }, [isMuted, pinkNoiseActive, pinkNoiseSetupDone, isNoteActive, frequency]);
-
-  // Using imported formatTime utility
+  const wakeLock = useSignal<WakeLockSentinel | null>(null); // Wake lock sentinel reference
 
   // Add a log entry
   const addLog = (text: string) => {
@@ -163,121 +80,36 @@ export default function WebRTC() {
     }, 0);
   };
 
-  // Generic parameter update utility
-  type AudioParamUpdateOptions<T> = {
-    // Required parameters
-    signal: Signal<T>; // Signal storing the parameter value
-    paramName: string; // Parameter name for logging and sending
-    newValue: T; // New value to set
+  // Initialize audio engine using the useAudioEngine hook
+  const audio = useAudioEngine(addLog);
 
-    // Optional parameters
-    audioNode?: AudioParam | null; // Web Audio node parameter to update (if applicable)
-    formatValue?: (value: T) => string; // Function to format value for display
-    unit?: string; // Unit of measurement for logging
-    extraUpdates?: ((value: T) => void) | null; // Additional updates to perform
-    skipSendToController?: boolean; // Skip sending to controller
-    rampTime?: number; // Time in seconds for parameter ramping (0 for immediate)
-    useExponentialRamp?: boolean; // Whether to use exponential ramping vs linear
-  };
+  // Handler for when user finishes pink noise volume adjustment
+  const handleVolumeCheckDone = useCallback(() => {
+    audio.handleVolumeCheckDone();
+    showAudioButton.value = false; // Hide the enable audio button
+  }, []);
+
+  // Using imported formatTime utility for log timestamps
 
   // Utility for sending a parameter update to controller
-  const sendParamToController = (param: string, value: unknown) => {
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param,
-          value,
-        }));
-      } catch (error) {
-        console.error(`Error sending ${param} update:`, error);
-      }
-    }
-  };
-
-  // Generic parameter update function
-  const updateAudioParam = <T extends unknown>({
-    signal,
-    paramName,
-    newValue,
-    audioNode = null,
-    formatValue = String,
-    unit = "",
-    extraUpdates = null,
-    skipSendToController = false,
-    rampTime = 0, // Default: no ramping
-    useExponentialRamp = false, // Default: linear ramping
-  }: AudioParamUpdateOptions<T>) => {
-    // Update the signal value
-    signal.value = newValue;
-
-    // Update the audio node if provided and audioContext exists
-    if (audioNode && audioContext) {
-      const now = audioContext.currentTime;
-
-      // If ramping is enabled
-      if (rampTime > 0) {
-        // Cancel any scheduled parameter changes
-        audioNode.cancelScheduledValues(now);
-
-        // Set current value at current time to start the ramp from
-        const currentValue = audioNode.value;
-        audioNode.setValueAtTime(currentValue, now);
-
-        // Use exponential ramp for frequency (must be > 0) or linear ramp otherwise
-        if (
-          useExponentialRamp && currentValue > 0 && (newValue as number) > 0
-        ) {
-          // Exponential ramps sound more natural for frequency changes
-          audioNode.exponentialRampToValueAtTime(
-            newValue as number,
-            now + rampTime,
-          );
-        } else {
-          // Linear ramp for other parameters or if values are zero/negative
-          audioNode.linearRampToValueAtTime(newValue as number, now + rampTime);
-        }
-      } else {
-        // Immediate change without ramping
-        audioNode.setValueAtTime(newValue as number, now);
-      }
-    }
-
-    // Perform any extra updates
-    if (extraUpdates) {
-      extraUpdates(newValue);
-    }
-
-    // Log the change
-    const formattedValue = formatValue(newValue);
-    const unitString = unit ? ` ${unit}` : "";
-    addLog(`${paramName} updated to ${formattedValue}${unitString}`);
-
-    // Send to controller if connected and not skipped
-    if (!skipSendToController) {
-      sendParamToController(paramName.toLowerCase(), newValue);
-    }
-
-    return newValue;
-  };
 
   // Utility for sending all synth parameters to controller
   const sendAllSynthParameters = (channel: RTCDataChannel) => {
     try {
       // Define all parameters to send
       const params = [
-        { param: "frequency", value: frequency.value },
-        { param: "waveform", value: waveform.value },
-        { param: "volume", value: volume.value },
-        { param: "oscillatorEnabled", value: isNoteActive.value },
-        { param: "detune", value: detune.value },
-        { param: "attack", value: attack.value },
-        { param: "release", value: release.value },
-        { param: "filterCutoff", value: filterCutoff.value },
-        { param: "filterResonance", value: filterResonance.value },
-        { param: "vibratoRate", value: vibratoRate.value },
-        { param: "vibratoWidth", value: vibratoWidth.value },
-        { param: "portamentoTime", value: portamentoTime.value },
+        { param: "frequency", value: audio.frequency.value },
+        { param: "waveform", value: audio.waveform.value },
+        { param: "volume", value: audio.volume.value },
+        { param: "oscillatorEnabled", value: audio.isNoteActive.value },
+        { param: "detune", value: audio.detune.value },
+        { param: "attack", value: audio.attack.value },
+        { param: "release", value: audio.release.value },
+        { param: "filterCutoff", value: audio.filterCutoff.value },
+        { param: "filterResonance", value: audio.filterResonance.value },
+        { param: "vibratoRate", value: audio.vibratoRate.value },
+        { param: "vibratoWidth", value: audio.vibratoWidth.value },
+        { param: "portamentoTime", value: audio.portamentoTime.value },
       ];
 
       // Send each parameter
@@ -292,8 +124,8 @@ export default function WebRTC() {
       // Send audio state
       channel.send(JSON.stringify({
         type: "audio_state",
-        isMuted: isMuted.value,
-        audioState: audioState.value,
+        isMuted: audio.isMuted.value,
+        audioState: audio.audioContextState.value,
       }));
 
       addLog("Sent synth parameters and audio state to controller");
@@ -309,7 +141,7 @@ export default function WebRTC() {
         type: "audio_state",
         isMuted: true, // Audio is muted
         audioState: "disabled",
-        pendingNote: isNoteActive.value, // Let controller know if there's a pending note
+        pendingNote: audio.isNoteActive.value, // Let controller know if there's a pending note
       }));
       addLog("Sent audio state to controller (audio not enabled)");
     } catch (error) {
@@ -380,84 +212,129 @@ export default function WebRTC() {
   };
 
   // Unified parameter handler map
+  // Function to send parameter updates to controller
+  const sendParamToController = (param: string, value: unknown) => {
+    if (dataChannel.value && dataChannel.value.readyState === "open") {
+      try {
+        dataChannel.value.send(JSON.stringify({
+          type: "synth_param",
+          param,
+          value,
+        }));
+      } catch (error) {
+        console.error(`Error sending ${param} update:`, error);
+      }
+    }
+  };
+
   const paramHandlers: Record<string, ParamHandler> = {
     frequency: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.frequency.validate(Number(value));
-      updateFrequency(validValue);
+      audio.updateSynthParam("frequency", validValue);
+      sendParamToController("frequency", validValue);
       addLog(`Frequency updated to ${validValue}Hz by ${source}`);
     },
     waveform: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.waveform.validate(value);
-      updateWaveform(validValue);
+      audio.updateSynthParam("waveform", validValue);
+      sendParamToController("waveform", validValue);
       addLog(`Waveform updated to ${validValue} by ${source}`);
     },
     volume: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.volume.validate(Number(value));
-      updateVolume(validValue);
+      audio.updateSynthParam("volume", validValue);
+      sendParamToController("volume", validValue);
       addLog(`Volume updated to ${validValue} by ${source}`);
     },
     detune: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.detune.validate(Number(value));
-      updateDetune(validValue);
+      audio.updateSynthParam("detune", validValue);
+      sendParamToController("detune", validValue);
       addLog(`Detune updated to ${validValue} cents by ${source}`);
     },
     oscillatorEnabled: (value, source = "controller") => {
       const enabled = PARAM_DESCRIPTORS.oscillatorEnabled.validate(value);
       // Handle as note on/off
       if (enabled) {
-        noteOn(frequency.value);
-        isNoteActive.value = true;
+        audio.playNote(audio.frequency.value);
+        // Send note_on state to controller if connected
+        if (dataChannel.value && dataChannel.value.readyState === "open") {
+          try {
+            dataChannel.value.send(JSON.stringify({
+              type: "note_on",
+              frequency: audio.frequency.value,
+            }));
+          } catch (error) {
+            console.error("Error sending note_on:", error);
+          }
+        }
       } else {
-        noteOff();
-        isNoteActive.value = false;
+        audio.stopNote();
+        // Send note_off to controller if connected
+        if (dataChannel.value && dataChannel.value.readyState === "open") {
+          try {
+            dataChannel.value.send(JSON.stringify({
+              type: "note_off",
+            }));
+          } catch (error) {
+            console.error("Error sending note_off state:", error);
+          }
+        }
       }
       addLog(`Note ${enabled ? "on" : "off"} by ${source}`);
     },
     attack: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.attack.validate(Number(value));
-      updateAttack(validValue);
+      audio.updateSynthParam("attack", validValue);
+      sendParamToController("attack", validValue);
       addLog(`Attack updated to ${validValue}s by ${source}`);
     },
     release: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.release.validate(Number(value));
-      updateRelease(validValue);
+      audio.updateSynthParam("release", validValue);
+      sendParamToController("release", validValue);
       addLog(`Release updated to ${validValue}s by ${source}`);
     },
     filterCutoff: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.filterCutoff.validate(Number(value));
-      updateFilterCutoff(validValue);
+      audio.updateSynthParam("filterCutoff", validValue);
+      sendParamToController("filterCutoff", validValue);
       addLog(`Filter cutoff updated to ${validValue}Hz by ${source}`);
     },
     filterResonance: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.filterResonance.validate(
         Number(value),
       );
-      updateFilterResonance(validValue);
+      audio.updateSynthParam("filterResonance", validValue);
+      sendParamToController("filterResonance", validValue);
       addLog(`Filter resonance updated to ${validValue} by ${source}`);
     },
     vibratoRate: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.vibratoRate.validate(Number(value));
-      updateVibratoRate(validValue);
+      audio.updateSynthParam("vibratoRate", validValue);
+      sendParamToController("vibratoRate", validValue);
       addLog(`Vibrato rate updated to ${validValue}Hz by ${source}`);
     },
     vibratoWidth: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.vibratoWidth.validate(Number(value));
-      updateVibratoWidth(validValue);
+      audio.updateSynthParam("vibratoWidth", validValue);
+      sendParamToController("vibratoWidth", validValue);
       addLog(`Vibrato width updated to ${validValue} cents by ${source}`);
     },
     portamentoTime: (value, source = "controller") => {
       const validValue = PARAM_DESCRIPTORS.portamentoTime.validate(
         Number(value),
       );
-      updatePortamentoTime(validValue);
+      audio.updateSynthParam("portamentoTime", validValue);
+      sendParamToController("portamentoTime", validValue);
       addLog(`Portamento time updated to ${validValue}s by ${source}`);
     },
     note: (value, source = "controller") => {
-      // Convert note to frequency (physics-based approach)
-      const noteFreq = noteToFrequency(value as string);
-      updateFrequency(noteFreq);
-      currentNote.value = value as string;
-      addLog(`Note ${value} (${noteFreq}Hz) set by ${source}`);
+      // Handle note name directly using audio engine
+      audio.playNoteByName(value as string);
+      // Send to controller if connected
+      sendParamToController("note", value);
+      addLog(`Note ${value} (${audio.frequency.value}Hz) set by ${source}`);
     },
   };
 
@@ -479,41 +356,47 @@ export default function WebRTC() {
           const param = message.param;
           const value = message.value;
 
-          // Special handling for oscillatorEnabled - update isNoteActive
+          // Special handling for oscillatorEnabled - control note on/off
           if (param === "oscillatorEnabled") {
             console.log(
-              `[SYNTH] Received oscillatorEnabled=${value}, current isNoteActive=${isNoteActive.value}, isMuted=${isMuted.value}`,
+              `[SYNTH] Received oscillatorEnabled=${value}, current isNoteActive=${audio.isNoteActive.value}, isMuted=${audio.isMuted.value}`,
             );
-            isNoteActive.value = !!value; // Convert to boolean
 
-            // If audio is already enabled (not muted) and oscillatorEnabled is true, play the note immediately
-            if (isNoteActive.value && !isMuted.value && audioContext) {
-              console.log(
-                "[SYNTH] Audio already enabled and oscillatorEnabled=true, playing note immediately",
-              );
-              noteOn(frequency.value);
-              addLog(
-                `Playing note ${currentNote.value} (${frequency.value}Hz) due to controller setting`,
-              );
-            } else if (isNoteActive.value && (isMuted.value || !audioContext)) {
-              // If muted or no audio context, just log the note request and notify controller
-              addLog(
-                `Note ${currentNote.value} requested but audio not enabled`,
-              );
+            // If oscillatorEnabled is true, play note; otherwise stop note
+            if (value) {
+              // If audio is ready and not muted, play the note immediately
+              if (audio.audioContextReady.value && !audio.isMuted.value) {
+                console.log(
+                  "[SYNTH] Audio ready and oscillatorEnabled=true, playing note immediately",
+                );
+                audio.playNote(audio.frequency.value);
+                addLog(
+                  `Playing note ${audio.currentNote.value} (${audio.frequency.value}Hz) due to controller setting`,
+                );
+              } else {
+                // If audio not ready or muted, log the note request and notify controller
+                addLog(
+                  `Note ${audio.currentNote.value} requested but audio not enabled or muted`,
+                );
 
-              // Let controller know that audio is muted but note is pending
-              if (channel.readyState === "open") {
-                try {
-                  channel.send(JSON.stringify({
-                    type: "audio_state",
-                    isMuted: true,
-                    audioState: "disabled",
-                    pendingNote: true,
-                  }));
-                } catch (error) {
-                  console.error("Error sending audio state:", error);
+                // Let controller know that audio is muted but note is pending
+                if (channel.readyState === "open") {
+                  try {
+                    channel.send(JSON.stringify({
+                      type: "audio_state",
+                      isMuted: true,
+                      audioState: "disabled",
+                      pendingNote: true,
+                    }));
+                  } catch (error) {
+                    console.error("Error sending audio state:", error);
+                  }
                 }
               }
+            } else {
+              // Stop the note
+              audio.stopNote();
+              addLog("Note off due to controller setting");
             }
           }
 
@@ -532,23 +415,16 @@ export default function WebRTC() {
         // Handle note_on messages
         if (message.type === "note_on") {
           if (message.frequency) {
-            // Update the frequency value
-            frequency.value = message.frequency;
-            currentNote.value = frequencyToNote(message.frequency);
-
-            // Always update state to track that note should be on
-            isNoteActive.value = true;
-
-            // Only play sound if audio is already initialized
-            if (audioContext && !isMuted.value) {
-              noteOn(message.frequency);
+            // Only play sound if audio is already initialized and not muted
+            if (audio.audioContextReady.value && !audio.isMuted.value) {
+              audio.playNote(message.frequency);
               addLog(
-                `Playing note ${currentNote.value} (${frequency.value}Hz)`,
+                `Playing note ${audio.currentNote.value} (${message.frequency}Hz)`,
               );
             } else {
               // If audio not enabled, just log the message and notify controller
               addLog(
-                `Note ${currentNote.value} requested but audio not enabled`,
+                `Note requested but audio not enabled or muted`,
               );
 
               // Let controller know that audio is muted
@@ -572,8 +448,7 @@ export default function WebRTC() {
         // Handle note_off messages
         if (message.type === "note_off") {
           // Release the current note
-          noteOff();
-          isNoteActive.value = false;
+          audio.stopNote();
           return;
         }
 
@@ -633,7 +508,7 @@ export default function WebRTC() {
       connected.value = true;
 
       // Send current synth parameters to the controller
-      if (!isMuted.value) { // Not muted means audio is enabled
+      if (!audio.isMuted.value) { // Not muted means audio is enabled
         sendAllSynthParameters(channel);
       } else {
         // Even if audio is not enabled, send the audio state
@@ -943,10 +818,10 @@ export default function WebRTC() {
 
               // Auto-connect if we have audio enabled and haven't attempted connection yet
               console.log("Received controller info, should connect:", {
-                isMuted: isMuted.value,
+                isMuted: audio.isMuted.value,
                 connected: connected.value,
                 autoConnectAttempted: autoConnectAttempted.value,
-                audioState: audioState.value,
+                audioState: audio.audioContextState.value,
                 showAudioButton: showAudioButton.value,
               });
 
@@ -1143,967 +1018,29 @@ export default function WebRTC() {
     }
   };
 
-  // Send audio state to controller
-  const sendAudioState = () => {
-    if (!dataChannel.value || dataChannel.value.readyState !== "open") {
-      return;
-    }
-
-    if (isMuted.value) {
-      sendAudioStateOnly(dataChannel.value);
-    } else {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "audio_state",
-          isMuted: isMuted.value,
-          audioState: audioState.value,
-          pendingNote: false, // No pending notes when audio is enabled
-          isNoteActive: isNoteActive.value, // Current note state
-        }));
-        console.log(
-          "Sent audio state update:",
-          isMuted.value ? "muted" : "unmuted",
-          audioState.value,
-          isNoteActive.value ? "note active" : "note inactive",
-        );
-      } catch (error) {
-        console.error("Error sending audio state:", error);
-      }
-    }
-  };
-
   // Initialize audio context with user gesture
   const initAudioContext = useCallback(async () => {
-    addLog("[INIT_AUDIO] initAudioContext started.");
-    console.log("[INIT_AUDIO] initAudioContext started.");
     try {
-      // Store wasNoteActive so it can be accessed by handleVolumeCheckDone or fallback path.
-      // Using a temporary global-like variable; a ref or dedicated signal might be cleaner.
-      (globalThis as unknown as GlobalThisExtensions)
-        ._wasNoteActiveDuringAudioInit = isNoteActive.value;
-      (globalThis as unknown as GlobalThisExtensions)._frequencyAtAudioInit =
-        frequency.value; // Store frequency too
+      // Initialize the audio context
+      await audio.initializeAudioContext();
 
-      // Create audio context if it doesn't exist (this block runs once)
-      if (!audioContext) {
-        addLog("[INIT_AUDIO] Creating AudioContext...");
-        console.log("[INIT_AUDIO] Creating AudioContext...");
-        audioContext = new (globalThis.AudioContext ||
-          (globalThis as unknown as Window).webkitAudioContext)();
-        addLog(
-          `[INIT_AUDIO] Audio context created. State: ${audioContext.state}`,
-        );
-        console.log(
-          `[INIT_AUDIO] Audio context created. State: ${audioContext.state}`,
-        );
+      // Start pink noise for volume check
+      audio.startPinkNoise(0.15);
 
-        filterNode = audioContext.createBiquadFilter();
-        filterNode.type = "lowpass";
-        filterNode.frequency.value = filterCutoff.value;
-        filterNode.Q.value = filterResonance.value;
+      // Update UI state
+      showAudioButton.value = false;
 
-        gainNode = audioContext.createGain();
-        gainNode.gain.setValueAtTime(0, audioContext.currentTime); // Main synth starts silent
-
-        filterNode.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-
-        vibratoOsc = audioContext.createOscillator();
-        vibratoOsc.type = "sine";
-        vibratoOsc.frequency.value = vibratoRate.value;
-        vibratoGain = audioContext.createGain();
-        // Vibrato gain calculation logic... (simplified for brevity, assume it's correct as original)
-        if (vibratoRate.value > 0 && vibratoWidth.value > 0) {
-          const semitoneRatio = Math.pow(2, 1 / 12);
-          const semitoneAmount = vibratoWidth.value / 100;
-          const baseFreq = 440; // Estimate
-          const vibratoAmount = baseFreq *
-            (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
-          vibratoGain.gain.value = vibratoAmount;
-        } else {
-          vibratoGain.gain.value = 0;
-        }
-        vibratoOsc.connect(vibratoGain);
-        vibratoOsc.start();
-
-        oscillator = audioContext.createOscillator();
-        oscillator.type = waveform.value;
-        oscillator.frequency.value = frequency.value;
-        oscillator.detune.value = detune.value;
-
-        if (vibratoGain) {
-          vibratoGain.connect(oscillator.frequency);
-          // Adjust vibratoGain based on actual oscillator frequency
-          if (vibratoWidth.value > 0) {
-            const semitoneRatio = Math.pow(2, 1 / 12);
-            const semitoneAmount = vibratoWidth.value / 100;
-            const currentFreq = oscillator.frequency.value;
-            const vibratoAmount = currentFreq *
-              (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
-            vibratoGain.gain.value = vibratoAmount;
-          }
-        }
-        oscillator.connect(filterNode);
-        oscillator.start();
-        addLog("[RESUME_AUDIO] Synth audio chain initialized.");
-        console.log("[RESUME_AUDIO] Synth audio chain initialized.");
-      }
-
-      // Send audio state to controller if connected
-      // Resume the audio context
-      const successfullyResumedOrWasRunning = await new Promise<boolean>(
-        (resolve) => {
-          if (audioContext && audioContext.state !== "running") {
-            addLog(
-              `[RESUME_AUDIO] AudioContext state is ${audioContext.state}, calling resume().`,
-            );
-            console.log(
-              `[RESUME_AUDIO] AudioContext state is ${audioContext.state}, calling resume().`,
-            );
-            audioContext.resume().then(() => {
-              if (audioContext) {
-                addLog(
-                  `[RESUME_AUDIO] Audio context resumed, state: ${audioContext.state}`,
-                );
-                console.log(
-                  `[RESUME_AUDIO] Audio context resumed, state: ${audioContext.state}`,
-                );
-                audioState.value = audioContext.state;
-              }
-              sendAudioState();
-              resolve(true);
-            }).catch((err) => {
-              addLog(
-                `[RESUME_AUDIO] Error resuming audio context: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-              console.error(
-                `[RESUME_AUDIO] Error resuming audio context:`,
-                err,
-              );
-              resolve(false);
-            });
-          } else if (audioContext) {
-            audioState.value = audioContext.state; // Already running
-            resolve(true);
-          } else {
-            addLog("AudioContext not available for resume.");
-            resolve(false); // No audioContext
-          }
-        },
-      );
-
-      if (!successfullyResumedOrWasRunning || !audioContext) {
-        addLog(
-          "Failed to initialize or resume audio context. Audio features disabled.",
-        );
-        // Optionally, provide UI feedback about the failure
-        showAudioButton.value = true; // Show button again if failed
-        return;
-      }
-
-      // Setup audio state change listener (if not already set)
-      if (audioContext && !audioContext.onstatechange) {
-        audioContext.onstatechange = () => {
-          if (audioContext) {
-            audioState.value = audioContext.state;
-            addLog(`Audio context state changed to: ${audioContext.state}`);
-            sendAudioState();
-          }
-        };
-      }
-
-      // --- Pink Noise Integration ---
-      let workletLoadSuccess = false;
-      if (!workletLoaded.value) {
-        try {
-          addLog("[WORKLET] Attempting to load AudioWorklet module...");
-          console.log("[WORKLET] Attempting to load AudioWorklet module...");
-          await audioContext.audioWorklet.addModule(
-            "/ridge_rat_type2_pink_noise_processor.js",
-          );
-          addLog(
-            "[WORKLET] AudioWorklet module ADDED successfully (before setting flags).",
-          );
-          console.log(
-            "[WORKLET] AudioWorklet module ADDED successfully (before setting flags).",
-          );
-          console.log("[WORKLET] About to set workletLoaded.value");
-          workletLoaded.value = true;
-          workletLoadSuccess = true;
-          addLog("Pink noise AudioWorklet loaded.");
-        } catch (e) {
-          addLog(
-            `[WORKLET_ERROR] Error loading pink noise worklet: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-          );
-          console.error(`[WORKLET_ERROR] Error loading pink noise worklet:`, e);
-          workletLoadSuccess = false;
-        }
-      } else {
-        workletLoadSuccess = true; // Already loaded
-      }
-
-      if (workletLoadSuccess) {
-        if (!pinkNoiseNodeRef.current) {
-          addLog("[WORKLET_NODE] Creating AudioWorkletNode and GainNode...");
-          console.log(
-            "[WORKLET_NODE] Creating AudioWorkletNode and GainNode...",
-          );
-          try {
-            pinkNoiseNodeRef.current = new AudioWorkletNode(
-              audioContext,
-              "ridge-rat-type2-pink-noise-generator",
-            );
-            pinkNoiseGainRef.current = audioContext.createGain();
-            addLog("[WORKLET_NODE] AudioWorkletNode and GainNode CREATED.");
-            console.log(
-              "[WORKLET_NODE] AudioWorkletNode and GainNode CREATED.",
-            );
-            pinkNoiseNodeRef.current.connect(pinkNoiseGainRef.current).connect(
-              audioContext.destination,
-            );
-            addLog("[WORKLET_NODE] Nodes CONNECTED.");
-            console.log("[WORKLET_NODE] Nodes CONNECTED.");
-            addLog("Pink noise generator created.");
-          } catch (e) {
-            addLog(
-              `[WORKLET_NODE_ERROR] Error creating/connecting AudioWorkletNode: ${
-                e instanceof Error ? e.message : String(e)
-              }`,
-            );
-            console.error(
-              "[WORKLET_NODE_ERROR] Error creating/connecting AudioWorkletNode:",
-              e,
-            );
-            workletLoadSuccess = false; // Treat as failure if node creation/connection fails
-          }
-        }
-        if (pinkNoiseGainRef.current) {
-          // Ramp up gain smoothly for pink noise
-          pinkNoiseGainRef.current.gain.setValueAtTime(
-            0,
-            audioContext.currentTime,
-          );
-          pinkNoiseGainRef.current.gain.linearRampToValueAtTime(
-            0.15,
-            audioContext.currentTime + 0.1,
-          ); // Adjust volume as needed
-        }
-        pinkNoiseActive.value = true;
-        showAudioButton.value = false; // Hide "Enable Audio" button, show pink noise UI
-        isMuted.value = true; // Keep main synth muted during pink noise
-        addLog("Pink noise activated for volume calibration.");
-      } else {
-        // Fallback: Worklet failed to load, proceed as before (without pink noise)
-        addLog(
-          "Pink noise worklet failed to load. Enabling main synth directly.",
-        );
-        showAudioButton.value = false;
-        isMuted.value = false; // Unmute main synth
-        pinkNoiseSetupDone.value = true; // Skip pink noise setup step as it failed
-
-        const wasNoteActive = (globalThis as unknown as GlobalThisExtensions)
-          ._wasNoteActiveDuringAudioInit;
-        const freqAtInit = (globalThis as unknown as GlobalThisExtensions)
-          ._frequencyAtAudioInit || DEFAULT_SYNTH_PARAMS.frequency;
-        if (wasNoteActive || isNoteActive.value) { // isNoteActive might have changed via controller
-          if (audioContext && audioContext.state === "running") {
-            addLog(
-              "Restoring active note after audio enabled (pink noise fallback).",
-            );
-            // If isNoteActive is true, controller wants it on. If wasNoteActive was true, user wanted it on.
-            noteOn(isNoteActive.value ? frequency.value : freqAtInit, true); // force re-trigger
-          }
-        }
-      }
+      // Log success
+      addLog("Audio initialized and pink noise started for volume check");
     } catch (e) {
       addLog(
-        `Error in initAudioContext: ${
+        `Error initializing audio: ${
           e instanceof Error ? e.message : String(e)
         }`,
       );
-      showAudioButton.value = true; // Ensure button is shown if there's a top-level error
+      showAudioButton.value = true; // Show audio button again if initialization fails
     }
-  }, [
-    audioState,
-    workletLoaded,
-    pinkNoiseActive,
-    showAudioButton,
-    isMuted,
-    pinkNoiseSetupDone,
-    isNoteActive,
-    frequency,
-    filterCutoff,
-    filterResonance,
-    vibratoRate,
-    vibratoWidth,
-    waveform,
-    detune,
-  ]);
-
-  // Update oscillator frequency
-  const updateFrequency = (newFrequency: number) => {
-    // Always update the stored value
-    frequency.value = newFrequency;
-
-    // Update UI note display as well
-    currentNote.value = frequencyToNote(newFrequency);
-
-    // Update the Web Audio oscillator if it exists
-    if (oscillator && audioContext) {
-      const now = audioContext.currentTime;
-      const currentFreq = oscillator.frequency.value;
-
-      // Apply portamento if enabled
-      if (portamentoTime.value > 0) {
-        // Proper sequence for smooth automation:
-        // 1. Cancel any scheduled automation first
-        oscillator.frequency.cancelScheduledValues(now);
-
-        // 2. Set current value at current time
-        oscillator.frequency.setValueAtTime(currentFreq, now);
-
-        // 3. Use exponential ramp for perceptually smooth pitch transition
-        // Note: exponentialRamp can't go to zero, but that's not an issue for frequencies
-        oscillator.frequency.exponentialRampToValueAtTime(
-          newFrequency,
-          now + portamentoTime.value,
-        );
-
-        addLog(
-          `Frequency gliding to ${newFrequency}Hz (${currentNote.value}) over ${portamentoTime.value}s`,
-        );
-      } else {
-        // Instant frequency change
-        // Still need to cancel any existing automation first
-        oscillator.frequency.cancelScheduledValues(now);
-        oscillator.frequency.setValueAtTime(
-          newFrequency,
-          now,
-        );
-        addLog(`Frequency changed to ${newFrequency}Hz (${currentNote.value})`);
-      }
-
-      // Update vibrato amount when frequency changes (if vibrato is active)
-      if (vibratoGain && vibratoOsc && vibratoWidth.value > 0 && audioContext) {
-        const now = audioContext.currentTime;
-        const semitoneRatio = Math.pow(2, 1 / 12);
-        const semitoneAmount = vibratoWidth.value / 100;
-        // Calculate new vibrato amount based on new frequency
-        const vibratoAmount = newFrequency *
-          (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
-
-        vibratoGain.gain.setValueAtTime(vibratoAmount, now);
-        console.log(
-          `Vibrato amount adjusted to ${vibratoAmount}Hz for new frequency ${newFrequency}Hz`,
-        );
-      }
-    } else {
-      // Just log the change if no oscillator exists
-      addLog(`Frequency changed to ${newFrequency}Hz (${currentNote.value})`);
-    }
-
-    // Send frequency update to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "frequency",
-          value: newFrequency,
-        }));
-      } catch (error) {
-        console.error("Error sending frequency update:", error);
-      }
-    }
-  };
-
-  // Update oscillator waveform
-  const updateWaveform = (newWaveform: OscillatorType) => {
-    // Update the signal value
-    waveform.value = newWaveform;
-
-    // Update the actual oscillator if it exists
-    if (oscillator) {
-      // Need to update oscillator type directly since it's not an AudioParam
-      oscillator.type = newWaveform;
-
-      // Log the change
-      addLog(`Waveform updated to ${newWaveform}`);
-    } else {
-      // Just update the signal if no oscillator exists
-      updateAudioParam({
-        signal: waveform,
-        paramName: "Waveform",
-        newValue: newWaveform,
-      });
-    }
-
-    // Send to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "waveform",
-          value: newWaveform,
-        }));
-      } catch (error) {
-        console.error("Error sending waveform update:", error);
-      }
-    }
-  };
-
-  // Update volume
-  const updateVolume = (newVolume: number) => {
-    // Update the signal value
-    volume.value = newVolume;
-
-    // Update the gain node if it exists
-    if (gainNode && audioContext) {
-      // Don't interrupt attack/release envelopes
-      // Only update the volume if the oscillator is in steady state or there's no oscillator
-      if ((oscillator && isNoteActive.value) || !oscillator) {
-        // Check the current gain value
-        const currentGain = gainNode.gain.value;
-
-        // If we're in steady state (not in middle of attack/release) it's safe to update
-        if (currentGain > 0.9 * volume.value || !oscillator) {
-          updateAudioParam({
-            signal: volume,
-            paramName: "Volume",
-            newValue: newVolume,
-            audioNode: gainNode.gain,
-            formatValue: (val) => `${Math.round(val * 100)}%`,
-            rampTime: 0.02, // 20ms ramp time
-            useExponentialRamp: false, // Linear ramping for volume
-            skipSendToController: true, // We'll handle controller updates manually
-          });
-        }
-        // Otherwise we're probably in an attack or release phase, don't interrupt
-      } else {
-        // Just update the signal without changing audio - it will be used next time a note is played
-        addLog(`Volume updated to ${Math.round(newVolume * 100)}%`);
-      }
-    } else {
-      // Just log if no gainNode exists
-      addLog(`Volume updated to ${Math.round(newVolume * 100)}%`);
-    }
-
-    // Send to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "volume",
-          value: newVolume,
-        }));
-      } catch (error) {
-        console.error("Error sending volume update:", error);
-      }
-    }
-  };
-
-  // Note frequencies are now imported from the synth library
-
-  // Convert note to frequency (for UI convenience)
-  const _updateNoteByName = (note: string) => {
-    // Get the frequency for this note from our mapping
-    const newFrequency = noteToFrequency(note);
-
-    // Update the UI note display
-    currentNote.value = note;
-
-    // Update the actual frequency (physics-based parameter)
-    updateFrequency(newFrequency);
-
-    addLog(`Note changed to ${note} (${newFrequency}Hz)`);
-  };
-
-  // Update detune value
-  const updateDetune = (cents: number) => {
-    // Update the signal value
-    detune.value = cents;
-
-    // Update the oscillator if it exists
-    if (oscillator) {
-      updateAudioParam({
-        signal: detune,
-        paramName: "Detune",
-        newValue: cents,
-        audioNode: oscillator.detune,
-        unit: "cents",
-        formatValue: (val) => val > 0 ? `+${val}` : String(val),
-      });
-    } else {
-      // Just update the signal if no oscillator exists
-      updateAudioParam({
-        signal: detune,
-        paramName: "Detune",
-        newValue: cents,
-        unit: "cents",
-        formatValue: (val) => val > 0 ? `+${val}` : String(val),
-      });
-    }
-
-    // Send to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "detune",
-          value: cents,
-        }));
-      } catch (error) {
-        console.error("Error sending detune update:", error);
-      }
-    }
-  };
-
-  // Update attack time
-  const updateAttack = (attackTime: number) => {
-    // No audioNode for attack as it's applied when oscillator is restarted
-    updateAudioParam({
-      signal: attack,
-      paramName: "Attack",
-      newValue: attackTime,
-      unit: "s",
-      formatValue: (val) =>
-        val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
-    });
-
-    // Send to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "attack",
-          value: attackTime,
-        }));
-      } catch (error) {
-        console.error("Error sending attack update:", error);
-      }
-    }
-  };
-
-  // Update release time
-  const updateRelease = (releaseTime: number) => {
-    // No audioNode for release as it's applied when oscillator is released
-    updateAudioParam({
-      signal: release,
-      paramName: "Release",
-      newValue: releaseTime,
-      unit: "s",
-      formatValue: (val) =>
-        val < 0.01 ? `${Math.round(val * 1000)}ms` : `${val.toFixed(2)}s`,
-    });
-
-    // Send to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "release",
-          value: releaseTime,
-        }));
-      } catch (error) {
-        console.error("Error sending release update:", error);
-      }
-    }
-  };
-
-  // Update filter cutoff
-  const updateFilterCutoff = (cutoffFreq: number) => {
-    // Update the signal value
-    filterCutoff.value = cutoffFreq;
-
-    // Update the filter if it exists
-    if (filterNode) {
-      updateAudioParam({
-        signal: filterCutoff,
-        paramName: "Filter cutoff",
-        newValue: cutoffFreq,
-        audioNode: filterNode.frequency,
-        unit: "Hz",
-        formatValue: (val) =>
-          val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`,
-        rampTime: 0.02, // 20ms ramp time
-        useExponentialRamp: true, // Use exponential ramping for frequency
-      });
-    } else {
-      // Just update the signal if no filter exists
-      updateAudioParam({
-        signal: filterCutoff,
-        paramName: "Filter cutoff",
-        newValue: cutoffFreq,
-        unit: "Hz",
-        formatValue: (val) =>
-          val < 1000 ? `${Math.round(val)}` : `${(val / 1000).toFixed(1)}k`,
-      });
-    }
-
-    // Send to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "filterCutoff",
-          value: cutoffFreq,
-        }));
-      } catch (error) {
-        console.error("Error sending filter cutoff update:", error);
-      }
-    }
-  };
-
-  // Update filter resonance
-  const updateFilterResonance = (resonance: number) => {
-    // Update the signal value
-    filterResonance.value = resonance;
-
-    // Update the filter if it exists
-    if (filterNode) {
-      updateAudioParam({
-        signal: filterResonance,
-        paramName: "Filter resonance",
-        newValue: resonance,
-        audioNode: filterNode.Q,
-        formatValue: (val) => val.toFixed(1),
-        rampTime: 0.02, // 20ms ramp time
-        useExponentialRamp: false, // Linear ramping for resonance
-      });
-    } else {
-      // Just update the signal if no filter exists
-      updateAudioParam({
-        signal: filterResonance,
-        paramName: "Filter resonance",
-        newValue: resonance,
-        formatValue: (val) => val.toFixed(1),
-      });
-    }
-
-    // Send to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "synth_param",
-          param: "filterResonance",
-          value: resonance,
-        }));
-      } catch (error) {
-        console.error("Error sending filter resonance update:", error);
-      }
-    }
-  };
-
-  // Update vibrato rate
-  const updateVibratoRate = (rate: number) => {
-    // Special processing is needed for vibrato rate
-    const vibratoRateUpdates = (rate: number) => {
-      if (!vibratoOsc || !audioContext) return;
-
-      const now = audioContext.currentTime;
-
-      // If rate is 0, effectively disable vibrato by setting the LFO to 0Hz
-      if (rate === 0) {
-        // Set to very low value (0.001Hz = one cycle per ~17 minutes)
-        vibratoOsc.frequency.setValueAtTime(0.001, now);
-
-        // Also, if we have vibratoGain, set it to 0
-        if (vibratoGain) {
-          vibratoGain.gain.setValueAtTime(0, now);
-        }
-
-        console.log("Vibrato disabled (rate set to 0)");
-      } else {
-        // Normal rate update
-        vibratoOsc.frequency.setValueAtTime(rate, now);
-
-        // If vibrato was disabled before and we have width > 0, re-enable it
-        if (vibratoGain && vibratoWidth.value > 0 && oscillator) {
-          const semitoneRatio = Math.pow(2, 1 / 12);
-          const semitoneAmount = vibratoWidth.value / 100;
-          const currentFreq = oscillator.frequency.value;
-          const vibratoAmount = currentFreq *
-            (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
-
-          vibratoGain.gain.setValueAtTime(vibratoAmount, now);
-          console.log(
-            `Vibrato re-enabled with rate ${rate}Hz and amount ${vibratoAmount}Hz`,
-          );
-        }
-      }
-    };
-
-    // Use the generic update function with custom processing
-    updateAudioParam({
-      signal: vibratoRate,
-      paramName: "Vibrato rate",
-      newValue: rate,
-      unit: "Hz",
-      extraUpdates: vibratoRateUpdates,
-      formatValue: (val) => val === 0 ? "off" : val.toFixed(1),
-    });
-  };
-
-  // Update vibrato width
-  const updateVibratoWidth = (width: number) => {
-    // Special processing is needed for vibrato width
-    const vibratoWidthUpdates = (width: number) => {
-      if (!vibratoGain || !audioContext || !oscillator) return;
-
-      // Calculate vibrato amount based on semitone ratio and current frequency
-      const semitoneRatio = Math.pow(2, 1 / 12);
-      const semitoneAmount = width / 100;
-      const currentFreq = oscillator.frequency.value;
-      const vibratoAmount = currentFreq *
-        (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
-
-      vibratoGain.gain.setValueAtTime(vibratoAmount, audioContext.currentTime);
-      console.log(
-        `Vibrato width set to ${width} cents (amount: ${vibratoAmount}Hz around ${currentFreq}Hz)`,
-      );
-
-      // When width is 0, disable vibrato completely by setting gain to 0
-      if (width === 0 && vibratoOsc) {
-        vibratoGain.gain.setValueAtTime(0, audioContext.currentTime);
-      }
-    };
-
-    // Use the generic update function with custom processing
-    updateAudioParam({
-      signal: vibratoWidth,
-      paramName: "Vibrato width",
-      newValue: width,
-      unit: "cents",
-      extraUpdates: vibratoWidthUpdates,
-      formatValue: (val) => val === 0 ? "off" : val.toString(),
-    });
-  };
-
-  // Update portamento time
-  const updatePortamentoTime = (time: number) => {
-    // Use the generic update function
-    updateAudioParam({
-      signal: portamentoTime,
-      paramName: "Portamento time",
-      newValue: time,
-      unit: "s",
-      formatValue: (val) => val === 0 ? "off" : val.toFixed(2),
-    });
-  };
-
-  // Play a note with the given frequency (with attack envelope)
-  const noteOn = (noteFrequency: number, _forceTrigger = false) => {
-    console.log(`[SYNTH] noteOn called with frequency=${noteFrequency}Hz`);
-
-    if (!audioContext || isMuted.value) {
-      console.warn("[SYNTH] Cannot play note: audio not initialized or muted");
-      return;
-    }
-
-    const now = audioContext.currentTime;
-
-    // Initialize audio nodes if needed
-    if (!oscillator) {
-      console.log("[SYNTH] Creating and starting new oscillator");
-
-      // Check if audio nodes exist and create them if missing
-      if (!filterNode) {
-        console.log("[SYNTH] Creating missing filter node");
-        filterNode = audioContext.createBiquadFilter();
-        filterNode.type = "lowpass";
-        filterNode.frequency.value = filterCutoff.value;
-        filterNode.Q.value = filterResonance.value;
-      }
-
-      if (!gainNode) {
-        console.log("[SYNTH] Creating missing gain node");
-        gainNode = audioContext.createGain();
-
-        // Start with zero gain for attack envelope
-        gainNode.gain.setValueAtTime(0, now);
-
-        // Connect filter to gain and gain to destination
-        filterNode.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-      } else {
-        // Just set gain to zero for existing gain node
-        gainNode.gain.cancelScheduledValues(now);
-        gainNode.gain.setValueAtTime(0, now);
-      }
-
-      // Create vibrato if it doesn't exist and parameters are non-zero
-      if (!vibratoOsc && vibratoRate.value > 0 && vibratoWidth.value > 0) {
-        console.log("[SYNTH] Creating vibrato LFO");
-        vibratoOsc = audioContext.createOscillator();
-        vibratoOsc.type = "sine";
-        vibratoOsc.frequency.value = vibratoRate.value;
-
-        vibratoGain = audioContext.createGain();
-        const vibratoAmount = vibratoWidth.value / 100 * 0.5;
-        vibratoGain.gain.value = vibratoAmount;
-
-        // Connect vibrato oscillator to gain
-        vibratoOsc.connect(vibratoGain);
-        vibratoOsc.start();
-      }
-
-      // Create main oscillator
-      oscillator = audioContext.createOscillator();
-      oscillator.type = waveform.value;
-      oscillator.frequency.value = noteFrequency;
-      oscillator.detune.value = detune.value;
-
-      // Connect vibrato to frequency if it exists
-      if (vibratoOsc && vibratoGain) {
-        vibratoGain.connect(oscillator.frequency);
-      }
-
-      // Connect oscillator to filter (which is connected to the gain node)
-      console.log("[SYNTH] Connecting oscillator to audio chain");
-      oscillator.connect(filterNode);
-
-      // Start the oscillator
-      console.log("[SYNTH] Starting oscillator");
-      oscillator.start();
-    } else {
-      // Update frequency of existing oscillator
-      updateFrequency(noteFrequency);
-    }
-
-    // Update frequency display
-    frequency.value = noteFrequency;
-    currentNote.value = frequencyToNote(noteFrequency);
-
-    // Apply attack envelope to gain
-    if (gainNode) {
-      const attackTime = attack.value;
-
-      // Cancel any previous scheduled changes
-      gainNode.gain.cancelScheduledValues(now);
-
-      // Always start from zero for a consistent attack envelope,
-      // regardless of whether the oscillator was just created or already existed
-      gainNode.gain.setValueAtTime(0, now);
-
-      // Ramp up to full volume over attack time
-      gainNode.gain.linearRampToValueAtTime(volume.value, now + attackTime);
-      console.log(
-        `[SYNTH] Applied attack envelope: ${attackTime}s from zero to ${volume.value}`,
-      );
-    }
-
-    addLog(
-      `Note on: ${waveform.value} @ ${noteFrequency}Hz (${currentNote.value}) ` +
-        `with attack: ${attack.value}s, release: ${release.value}s`,
-    );
-
-    // Send note_on state to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "note_on",
-          frequency: noteFrequency,
-        }));
-      } catch (error) {
-        console.error("Error sending note_on:", error);
-      }
-    }
-  };
-
-  // Release the current note (with release envelope)
-  const noteOff = () => {
-    console.log("[SYNTH] noteOff called");
-
-    if (!audioContext || isMuted.value) {
-      return;
-    }
-
-    const now = audioContext.currentTime;
-
-    // Apply release envelope
-    if (oscillator && gainNode) {
-      const releaseTime = release.value;
-
-      // Cancel any previous scheduled changes
-      gainNode.gain.cancelScheduledValues(now);
-
-      // Get current gain value
-      const currentGain = gainNode.gain.value;
-      gainNode.gain.setValueAtTime(currentGain, now);
-
-      // Ramp down to zero over release time
-      gainNode.gain.linearRampToValueAtTime(0, now + releaseTime);
-      console.log(`[SYNTH] Applied release envelope: ${releaseTime}s`);
-
-      // Schedule actual oscillator stop after release is complete
-      setTimeout(() => {
-        if (oscillator) {
-          try {
-            oscillator.stop();
-            oscillator.disconnect();
-            oscillator = null;
-            console.log("[SYNTH] Oscillator stopped after release");
-          } catch (error) {
-            console.error("[SYNTH] Error stopping oscillator:", error);
-          }
-
-          // Don't stop vibrato, just disconnect it from the oscillator
-          if (vibratoGain) {
-            try {
-              // Just disconnect the gain node (removing connections to oscillator.frequency)
-              vibratoGain.disconnect();
-              console.log(
-                "[SYNTH] Disconnected vibrato from oscillator frequency",
-              );
-            } catch (error) {
-              console.error("[SYNTH] Error disconnecting vibrato:", error);
-            }
-          }
-        }
-      }, releaseTime * 1000);
-
-      addLog(`Note off with release: ${release.value}s`);
-    } else if (oscillator) {
-      // No gain node, just stop the oscillator immediately
-      console.log(
-        "[SYNTH] Stopping and disconnecting oscillator (no envelope)",
-      );
-      oscillator.stop();
-      oscillator.disconnect();
-      oscillator = null;
-      addLog("Note off (immediate)");
-
-      // Don't stop vibrato, just disconnect it from the oscillator
-      if (vibratoGain) {
-        try {
-          // Just disconnect the gain node (removing connections to oscillator.frequency)
-          vibratoGain.disconnect();
-          console.log("[SYNTH] Disconnected vibrato from oscillator frequency");
-        } catch (error) {
-          console.error("[SYNTH] Error disconnecting vibrato:", error);
-        }
-      }
-    } else {
-      console.log("[SYNTH] No note to release");
-    }
-
-    // Send note_off to controller if connected
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
-      try {
-        dataChannel.value.send(JSON.stringify({
-          type: "note_off",
-        }));
-      } catch (error) {
-        console.error("Error sending note_off state:", error);
-      }
-    }
-  };
-
-  // Wake lock sentinel reference
-  const wakeLock = useSignal<WakeLockSentinel | null>(null);
+  }, []);
 
   // Connect to the signaling server on mount and clean up on unmount
   useEffect(() => {
@@ -2154,62 +1091,7 @@ export default function WebRTC() {
       if (socket.value) socket.value.close();
       if (connection.value) connection.value.close();
 
-      // Stop audio and clean up audio nodes
-      if (oscillator) {
-        try {
-          oscillator.stop();
-          oscillator.disconnect();
-          console.log("Oscillator stopped and disconnected");
-        } catch (err) {
-          console.error("Error stopping oscillator:", err);
-        }
-      }
-
-      if (vibratoOsc) {
-        try {
-          vibratoOsc.stop();
-          vibratoOsc.disconnect();
-          console.log("Vibrato oscillator stopped and disconnected");
-        } catch (err) {
-          console.error("Error stopping vibrato oscillator:", err);
-        }
-      }
-
-      if (vibratoGain) {
-        try {
-          vibratoGain.disconnect();
-          console.log("Vibrato gain node disconnected");
-        } catch (err) {
-          console.error("Error disconnecting vibrato gain:", err);
-        }
-      }
-
-      if (filterNode) {
-        try {
-          filterNode.disconnect();
-          console.log("Filter node disconnected");
-        } catch (err) {
-          console.error("Error disconnecting filter node:", err);
-        }
-      }
-
-      if (gainNode) {
-        try {
-          gainNode.disconnect();
-          console.log("Gain node disconnected");
-        } catch (err) {
-          console.error("Error disconnecting gain node:", err);
-        }
-      }
-
-      // Close audio context
-      if (audioContext && !isMuted.value) { // Not muted = audio enabled
-        audioContext.close().then(() => {
-          addLog("Audio context closed");
-        }).catch((err) => {
-          console.error("Error closing audio context:", err);
-        });
-      }
+      // Audio engine cleanup is handled automatically by useAudioEngine hook's useEffect cleanup
     };
   }, []);
 
@@ -2257,216 +1139,149 @@ export default function WebRTC() {
             <p>Click below to enable audio (you can connect without audio).</p>
             <button
               type="button"
-              onClick={initAudioContext} // This now triggers pink noise first
+              onClick={initAudioContext} // This triggers audio initialization with pink noise
               class="audio-button"
             >
               Enable Audio
             </button>
           </div>
         )
-        : !pinkNoiseSetupDone.value && pinkNoiseActive.value &&
-            workletLoaded.value
-        ? ( // State 2: Pink noise volume adjustment screen (only if worklet loaded successfully)
-          <div
-            class="pink-noise-setup"
-            style="text-align: center; padding: 20px;"
-          >
-            <h1>Volume Adjustment</h1>
-            <p style="margin-bottom: 20px;">
-              Pink noise is playing. Please adjust your system volume to a
-              comfortable level.
-            </p>
-            <p style="font-size: 0.8em; color: #666; margin-bottom: 20px;">
-              (Note: This pink noise is intentionally quiet. Set your system
-              volume so you can hear it clearly but comfortably.)
-            </p>
-            <button
-              type="button"
-              onClick={handleVolumeCheckDone}
-              class="audio-button" // Re-use class or make a new one
-              style="padding: 10px 20px; font-size: 1.1em;"
-            >
-              Done Adjusting Volume
-            </button>
-            {/* Optional: Add a master volume slider here for the pink noise itself if desired */}
-          </div>
-        )
-        : ( // State 3: Main synth UI (audio enabled, pink noise setup done OR skipped due to error)
-          <div class="synth-ui">
-            <h1>WebRTC Synth</h1>
-
-            <div class="status-bar">
-              <div>
-                <span class="id-display">ID: {id.value}</span>
-                <span
-                  class={`connection-status ${
-                    connected.value ? "status-connected" : "status-disconnected"
-                  }`}
-                >
-                  {connected.value ? "Connected" : "Disconnected"}
-                </span>
-                <span class={`audio-status audio-${audioState.value}`}>
-                  Audio: {audioState.value}
-                </span>
-                <span
-                  class={`wake-lock-status ${
-                    wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"
-                  }`}
-                  title={wakeLock.value
-                    ? "Screen will stay awake"
-                    : "Screen may sleep (no wake lock)"}
-                >
-                  {wakeLock.value ? "🔆 Wake Lock" : "💤 No Wake Lock"}
-                </span>
-              </div>
-
-              {/* Controller auto-discovery implemented via minimal KV store */}
-              {activeController.value && !connected.value && (
-                <div class="controller-status">
-                  <span>Controller available: {activeController.value}</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      connectToController(activeController.value as string)}
-                    class="auto-connect-button"
-                  >
-                    Connect
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div class="synth-status">
-              <div class="synth-info">
-                <h3>Synth Status</h3>
-                <div class="param-display">
-                  <p>
-                    Note Status:{" "}
-                    <span
-                      class={isNoteActive.value ? "status-on" : "status-off"}
-                    >
-                      {isNoteActive.value ? "PLAYING" : "OFF"}
-                    </span>
-                  </p>
-                  <p>
-                    Pitch: <span class="param-value">{currentNote.value}</span>
-                  </p>
-                  <p>
-                    Waveform: <span class="param-value">{waveform.value}</span>
-                  </p>
-                  <p>
-                    Detune:{" "}
-                    <span class="param-value">
-                      {detune.value > 0 ? `+${detune.value}` : detune.value} ¢
-                    </span>
-                  </p>
-                  <p>
-                    Volume:{" "}
-                    <span class="param-value">
-                      {Math.round(volume.value * 100)}%
-                    </span>
-                  </p>
-                  <p>
-                    Attack:{" "}
-                    <span class="param-value">
-                      {attack.value < 0.01
-                        ? `${Math.round(attack.value * 1000)}ms`
-                        : `${attack.value.toFixed(2)}s`}
-                    </span>
-                  </p>
-                  <p>
-                    Release:{" "}
-                    <span class="param-value">
-                      {release.value < 0.01
-                        ? `${Math.round(release.value * 1000)}ms`
-                        : `${release.value.toFixed(2)}s`}
-                    </span>
-                  </p>
-                  <p>
-                    Filter:{" "}
-                    <span class="param-value">
-                      {filterCutoff.value < 1000
-                        ? `${Math.round(filterCutoff.value)}Hz`
-                        : `${(filterCutoff.value / 1000).toFixed(1)}kHz`}{" "}
-                      (Q:{filterResonance.value.toFixed(1)})
-                    </span>
-                  </p>
-                  <p>
-                    Vibrato:{" "}
-                    <span class="param-value">
-                      {vibratoRate.value.toFixed(1)}Hz,{" "}
-                      {Math.round(vibratoWidth.value)}¢
-                    </span>
-                  </p>
-                  <p>
-                    Portamento:{" "}
-                    <span class="param-value">
-                      {portamentoTime.value === 0
-                        ? "Off"
-                        : `${portamentoTime.value.toFixed(2)}s`}
-                    </span>
-                  </p>
-                </div>
-                <p class="control-info">
-                  Synth controls available in controller interface
-                </p>
-              </div>
-            </div>
-
-            <div class="connection-info">
-              <input
-                type="text"
-                placeholder="Enter target ID"
-                value={targetId.value}
-                onInput={(e) => targetId.value = e.currentTarget.value}
-                disabled={connected.value}
-              />
-              {connected.value
-                ? (
-                  <button
-                    type="button"
-                    onClick={() => disconnect(true)}
-                    class="disconnect-button"
-                  >
-                    Disconnect
-                  </button>
-                )
-                : (
-                  <button
-                    type="button"
-                    onClick={connect}
-                    disabled={!targetId.value.trim()}
-                  >
-                    Connect
-                  </button>
-                )}
-            </div>
-
-            <div class="message-area">
-              <input
-                type="text"
-                placeholder="Type a message"
-                value={message.value}
-                onInput={(e) => message.value = e.currentTarget.value}
-                onKeyDown={handleKeyDown}
-                disabled={!connected.value}
-              />
-              <button
-                type="button"
-                onClick={sendMessage}
-                disabled={!connected.value || !message.value.trim()}
+        : ( // New Combined State 2: Audio Enabled - Adjusting Volume / Using Synth
+          <div class="synth-and-volume-adjust-ui">
+            {/* Conditionally render Pink Noise UI elements */}
+            {audio.pinkNoiseActive.value && !audio.pinkNoiseSetupDone.value && (
+              <div
+                class="pink-noise-setup"
+                style="text-align: center; padding: 20px; border-bottom: 1px solid #eee; margin-bottom: 20px;"
               >
-                Send
-              </button>
-            </div>
+                <h1>Volume Adjustment</h1>
+                <p style="margin-bottom: 20px;">
+                  Pink noise is playing. Please adjust your system volume to a
+                  comfortable level.
+                </p>
+                <p style="font-size: 0.8em; color: #666; margin-bottom: 20px;">
+                  (Note: This pink noise is intentionally quiet. Set your system
+                  volume so you can hear it clearly but comfortably.)
+                </p>
+                <button
+                  type="button"
+                  onClick={handleVolumeCheckDone}
+                  class="audio-button"
+                  style="padding: 10px 20px; font-size: 1.1em;"
+                >
+                  Done Adjusting Volume
+                </button>
+              </div>
+            )}
 
-            <div class="log">
-              <h3>Connection Log</h3>
-              <ul>
-                {logs.value.map((log, index) => <li key={index}>{log}</li>)}
-              </ul>
-            </div>
-          </div>
+            {/* Main Synth UI elements */}
+            <div class="synth-ui">
+              <h1>WebRTC Synth</h1>
+
+              <div class="status-bar">
+                <div>
+                  <span class="id-display">ID: {id.value}</span>
+                  <span
+                    class={`connection-status ${
+                      connected.value
+                        ? "status-connected"
+                        : "status-disconnected"
+                    }`}
+                  >
+                    {connected.value ? "Connected" : "Disconnected"}
+                  </span>
+                  <span
+                    class={`audio-status audio-${audio.audioContextState.value}`}
+                  >
+                    Audio: {audio.audioContextState.value}
+                  </span>
+                  <span
+                    class={`wake-lock-status ${
+                      wakeLock.value ? "wake-lock-active" : "wake-lock-inactive"
+                    }`}
+                    title={wakeLock.value
+                      ? "Screen will stay awake"
+                      : "Screen may sleep (no wake lock)"}
+                  >
+                    {wakeLock.value ? "🔆 Wake Lock" : "💤 No Wake Lock"}
+                  </span>
+                </div>
+
+                {/* Controller auto-discovery implemented via minimal KV store */}
+                {activeController.value && !connected.value && (
+                  <div class="controller-status">
+                    <span>Controller available: {activeController.value}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        connectToController(activeController.value as string)}
+                      class="auto-connect-button"
+                    >
+                      Connect
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Synth component - FFT analyzer and parameter display */}
+              <Synth audio={audio} />
+
+              <div class="connection-info">
+                <input
+                  type="text"
+                  placeholder="Enter target ID"
+                  value={targetId.value}
+                  onInput={(e) => targetId.value = e.currentTarget.value}
+                  disabled={connected.value}
+                />
+                {connected.value
+                  ? (
+                    <button
+                      type="button"
+                      onClick={() => disconnect(true)}
+                      class="disconnect-button"
+                    >
+                      Disconnect
+                    </button>
+                  )
+                  : (
+                    <button
+                      type="button"
+                      onClick={connect}
+                      disabled={!targetId.value.trim()}
+                    >
+                      Connect
+                    </button>
+                  )}
+              </div>
+
+              <div class="message-area">
+                <input
+                  type="text"
+                  placeholder="Type a message"
+                  value={message.value}
+                  onInput={(e) => message.value = e.currentTarget.value}
+                  onKeyDown={handleKeyDown}
+                  disabled={!connected.value}
+                />
+                <button
+                  type="button"
+                  onClick={sendMessage}
+                  disabled={!connected.value || !message.value.trim()}
+                >
+                  Send
+                </button>
+              </div>
+
+              <div class="log">
+                <h3>Connection Log</h3>
+                <ul>
+                  {logs.value.map((log, index) => <li key={index}>{log}</li>)}
+                </ul>
+              </div>
+            </div>{" "}
+            {/* End of <div class="synth-ui"> */}
+          </div> /* End of <div class="synth-and-volume-adjust-ui"> */
         )}
     </div>
   );
