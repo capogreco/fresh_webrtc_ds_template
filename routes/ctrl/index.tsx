@@ -3,9 +3,9 @@ import { h } from "preact";
 import type { Handlers, PageProps } from "../../lib/types/fresh.ts";
 import Controller from "../../islands/Controller.tsx";
 import { getCookieValue } from "../../lib/utils/cookies.ts";
-import { 
-  verifySession, 
-  handleAuthRedirectsAndErrors 
+import {
+  handleAuthRedirectsAndErrors,
+  verifySession,
 } from "../../lib/authUtils.ts";
 import ErrorDisplayPage from "../../components/controller/page_states/ErrorDisplayPage.tsx";
 import LoginPageView from "../../components/controller/page_states/LoginPageView.tsx";
@@ -63,14 +63,14 @@ export const handler: Handlers = {
 
       // Verify the session
       const { sessionData, error } = await verifySession(sessionId, kv!);
-      
+
       // Handle authentication redirects and errors
       const authResponse = await handleAuthRedirectsAndErrors(req, kv!, ctx, {
         sessionId,
         sessionData,
         error,
       });
-      
+
       // If authResponse is not null, it means we need to handle an auth related response
       if (authResponse) {
         return authResponse;
@@ -137,12 +137,18 @@ export default function ControllerPage({ data }: PageProps) {
     const typedData = data as Record<string, unknown>;
     const errorData = {
       error: String(typedData.error),
-      details: "details" in typedData && typedData.details ? String(typedData.details) : undefined,
-      stack: "stack" in typedData && typedData.stack ? String(typedData.stack) : undefined,
-      quotaExceeded: "quotaExceeded" in typedData && typedData.quotaExceeded ? true : false
+      details: "details" in typedData && typedData.details
+        ? String(typedData.details)
+        : undefined,
+      stack: "stack" in typedData && typedData.stack
+        ? String(typedData.stack)
+        : undefined,
+      quotaExceeded: "quotaExceeded" in typedData && typedData.quotaExceeded
+        ? true
+        : false,
     };
     return (
-      <ErrorDisplayPage 
+      <ErrorDisplayPage
         error={errorData.error}
         details={errorData.details}
         stack={errorData.stack}
@@ -154,7 +160,7 @@ export default function ControllerPage({ data }: PageProps) {
   // Make sure data is properly formatted
   if (!data || typeof data !== "object") {
     return (
-      <ErrorDisplayPage 
+      <ErrorDisplayPage
         error={"Invalid data format. Please try again."}
       />
     );
@@ -164,8 +170,12 @@ export default function ControllerPage({ data }: PageProps) {
   if (data && typeof data === "object" && "needsLogin" in data) {
     const typedData = data as Record<string, unknown>;
     const loginData = {
-      loginUrl: "loginUrl" in typedData && typedData.loginUrl ? String(typedData.loginUrl) : "",
-      sessionExpired: "sessionExpired" in typedData && typedData.sessionExpired ? true : false
+      loginUrl: "loginUrl" in typedData && typedData.loginUrl
+        ? String(typedData.loginUrl)
+        : "",
+      sessionExpired: "sessionExpired" in typedData && typedData.sessionExpired
+        ? true
+        : false,
     };
     return (
       <LoginPageView

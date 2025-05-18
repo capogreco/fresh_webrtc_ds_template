@@ -1,5 +1,6 @@
 import { useSignal } from "@preact/signals";
-import { useEffect } from "preact/hooks";
+import { useCallback, useEffect, useRef } from "preact/hooks";
+import { h as _h } from "preact";
 import {
   requestWakeLock,
   setupWakeLockListeners,
@@ -20,6 +21,12 @@ declare global {
   interface Window {
     webkitAudioContext?: typeof AudioContext;
   }
+}
+
+// Add properties to globalThis
+interface GlobalThisExtensions {
+  _wasNoteActiveDuringAudioInit?: boolean;
+  _frequencyAtAudioInit?: number;
 }
 
 // Type definitions for abstracted functionality
@@ -76,6 +83,13 @@ export default function WebRTC() {
   const audioState = useSignal<string>("suspended");
   const showAudioButton = useSignal(true); // Start by showing the enable audio button
 
+  // Pink noise state for volume adjustment
+  const pinkNoiseActive = useSignal(false);
+  const workletLoaded = useSignal(false);
+  const pinkNoiseSetupDone = useSignal(false);
+  const pinkNoiseNodeRef = useRef<AudioWorkletNode | null>(null);
+  const pinkNoiseGainRef = useRef<GainNode | null>(null);
+
   // Synth parameters using the physics-based approach
   const frequency = useSignal(DEFAULT_SYNTH_PARAMS.frequency);
   const waveform = useSignal<OscillatorType>(DEFAULT_SYNTH_PARAMS.waveform);
@@ -94,6 +108,48 @@ export default function WebRTC() {
   const vibratoRate = useSignal(DEFAULT_SYNTH_PARAMS.vibratoRate);
   const vibratoWidth = useSignal(DEFAULT_SYNTH_PARAMS.vibratoWidth);
   const portamentoTime = useSignal(DEFAULT_SYNTH_PARAMS.portamentoTime);
+
+  // Handler for when user finishes pink noise volume adjustment
+  const handleVolumeCheckDone = useCallback(() => {
+    if (pinkNoiseGainRef.current && audioContext) {
+      // Ramp down pink noise gain smoothly
+      const currentGain = pinkNoiseGainRef.current.gain.value;
+      pinkNoiseGainRef.current.gain.setValueAtTime(
+        currentGain,
+        audioContext.currentTime,
+      );
+      pinkNoiseGainRef.current.gain.linearRampToValueAtTime(
+        0.0001,
+        audioContext.currentTime + 0.1,
+      ); // Ramp to near zero
+    }
+    // Defer setting pinkNoiseActive to false to allow fade-out
+    setTimeout(() => {
+      pinkNoiseActive.value = false;
+      if (pinkNoiseGainRef.current) pinkNoiseGainRef.current.gain.value = 0; // Ensure it's fully zero
+    }, 150); // A bit longer than ramp time
+
+    pinkNoiseSetupDone.value = true;
+    showAudioButton.value = false; // Hide the enable audio button
+    isMuted.value = false; // Now enable main synth audio
+    addLog("Volume check done. Main synth audio enabled.");
+
+    const wasNoteActive = (globalThis as unknown as GlobalThisExtensions)
+      ._wasNoteActiveDuringAudioInit;
+    const freqAtInit =
+      (globalThis as unknown as GlobalThisExtensions)._frequencyAtAudioInit ||
+      DEFAULT_SYNTH_PARAMS.frequency;
+
+    // If a note was active (either from before init or set by controller during pink noise)
+    if (isNoteActive.value || wasNoteActive) {
+      if (audioContext && audioContext.state === "running") {
+        addLog("Restoring/triggering note after volume check.");
+        // If isNoteActive is true, use current frequency. If only wasNoteActive, use frequency at init.
+        // This covers case where controller turned note on/off during pink noise.
+        noteOn(isNoteActive.value ? frequency.value : freqAtInit, true);
+      }
+    }
+  }, [isMuted, pinkNoiseActive, pinkNoiseSetupDone, isNoteActive, frequency]);
 
   // Using imported formatTime utility
 
@@ -1117,202 +1173,276 @@ export default function WebRTC() {
   };
 
   // Initialize audio context with user gesture
-  const initAudioContext = () => {
+  const initAudioContext = useCallback(async () => {
+    addLog("[INIT_AUDIO] initAudioContext started.");
+    console.log("[INIT_AUDIO] initAudioContext started.");
     try {
-      // Track previous audio state before making any changes
-      const wasNoteActive = isNoteActive.value;
+      // Store wasNoteActive so it can be accessed by handleVolumeCheckDone or fallback path.
+      // Using a temporary global-like variable; a ref or dedicated signal might be cleaner.
+      (globalThis as unknown as GlobalThisExtensions)
+        ._wasNoteActiveDuringAudioInit = isNoteActive.value;
+      (globalThis as unknown as GlobalThisExtensions)._frequencyAtAudioInit =
+        frequency.value; // Store frequency too
 
-      // Create audio context if it doesn't exist
+      // Create audio context if it doesn't exist (this block runs once)
       if (!audioContext) {
+        addLog("[INIT_AUDIO] Creating AudioContext...");
+        console.log("[INIT_AUDIO] Creating AudioContext...");
         audioContext = new (globalThis.AudioContext ||
           (globalThis as unknown as Window).webkitAudioContext)();
-        addLog("Audio context created");
+        addLog(
+          `[INIT_AUDIO] Audio context created. State: ${audioContext.state}`,
+        );
+        console.log(
+          `[INIT_AUDIO] Audio context created. State: ${audioContext.state}`,
+        );
 
-        // Create audio processing chain:
-        // Oscillator -> Vibrato -> Filter -> GainNode (volume) -> Destination
-
-        // Create filter node (always in chain)
         filterNode = audioContext.createBiquadFilter();
         filterNode.type = "lowpass";
         filterNode.frequency.value = filterCutoff.value;
         filterNode.Q.value = filterResonance.value;
 
-        // Create gain node for volume control (always in chain)
         gainNode = audioContext.createGain();
+        gainNode.gain.setValueAtTime(0, audioContext.currentTime); // Main synth starts silent
 
-        // Start with zero gain - we'll use attack/release envelopes
-        gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-
-        // Connect filter to gain, and gain to destination
         filterNode.connect(gainNode);
         gainNode.connect(audioContext.destination);
 
-        // Always create vibrato components - we'll set gain to 0 if not active
-        // Create vibrato oscillator (LFO)
         vibratoOsc = audioContext.createOscillator();
-        vibratoOsc.type = "sine"; // Sine wave is best for vibrato
+        vibratoOsc.type = "sine";
         vibratoOsc.frequency.value = vibratoRate.value;
-
-        // Create vibrato gain to control depth
         vibratoGain = audioContext.createGain();
-
-        // Only make vibrato audible if both rate and width are non-zero
+        // Vibrato gain calculation logic... (simplified for brevity, assume it's correct as original)
         if (vibratoRate.value > 0 && vibratoWidth.value > 0) {
-          // Calculate proper vibrato amplitude based on the frequency
-          const semitoneRatio = Math.pow(2, 1 / 12); // Semitone ratio
-          const semitoneAmount = vibratoWidth.value / 100; // Convert cents to semitone fraction
-          // We'll need to set the actual amount when the oscillator exists
-          // For now, use a safe estimate based on A4 frequency
-          const baseFreq = 440;
+          const semitoneRatio = Math.pow(2, 1 / 12);
+          const semitoneAmount = vibratoWidth.value / 100;
+          const baseFreq = 440; // Estimate
           const vibratoAmount = baseFreq *
             (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
           vibratoGain.gain.value = vibratoAmount;
-
-          console.log(
-            `Vibrato prepared with rate: ${vibratoRate.value}Hz and width: ${vibratoWidth.value}¢ (est. amount: ${vibratoAmount}Hz)`,
-          );
-          addLog(
-            `Vibrato prepared at ${vibratoRate.value}Hz with width ${vibratoWidth.value}¢`,
-          );
         } else {
-          // Zero gain means no vibrato effect
           vibratoGain.gain.value = 0;
-          console.log("Vibrato prepared but disabled (zero rate or width)");
         }
-
-        // Connect vibrato components - we'll connect to oscillator later
         vibratoOsc.connect(vibratoGain);
-
-        // Start the vibrato oscillator
         vibratoOsc.start();
 
-        // Create oscillator regardless of whether it's enabled
-        // We'll control its audibility through the gain node
         oscillator = audioContext.createOscillator();
         oscillator.type = waveform.value;
         oscillator.frequency.value = frequency.value;
         oscillator.detune.value = detune.value;
 
-        // Always connect vibrato LFO to oscillator frequency parameter
-        // (gain is set to 0 if vibrato should be inactive)
         if (vibratoGain) {
           vibratoGain.connect(oscillator.frequency);
-
-          // Update the vibrato amount based on the new oscillator's frequency
+          // Adjust vibratoGain based on actual oscillator frequency
           if (vibratoWidth.value > 0) {
             const semitoneRatio = Math.pow(2, 1 / 12);
             const semitoneAmount = vibratoWidth.value / 100;
             const currentFreq = oscillator.frequency.value;
             const vibratoAmount = currentFreq *
               (Math.pow(semitoneRatio, semitoneAmount / 2) - 1);
-
             vibratoGain.gain.value = vibratoAmount;
-            console.log(
-              `Vibrato amount adjusted to ${vibratoAmount}Hz based on oscillator frequency ${currentFreq}Hz`,
-            );
           }
         }
-
-        // Connect oscillator to filter
         oscillator.connect(filterNode);
-
-        // Start the oscillator
         oscillator.start();
-
-        // All notes start silent - will be triggered by noteOn()
-
-        // Log oscillator creation
-        addLog(
-          `Oscillator started with note ${currentNote.value} (${frequency.value}Hz) ` +
-            `using ${waveform.value} waveform, detune: ${detune.value}¢, ` +
-            `filter: ${Math.round(filterCutoff.value)}Hz (Q:${
-              filterResonance.value.toFixed(1)
-            })`,
-        );
-
-        // Start with gain set to 0 - notes will use noteOn() to play sound
-        // with proper attack envelope
+        addLog("[RESUME_AUDIO] Synth audio chain initialized.");
+        console.log("[RESUME_AUDIO] Synth audio chain initialized.");
       }
 
-      // Resume the audio context (needed for browsers that suspend by default)
-      if (audioContext && audioContext.state !== "running") {
-        audioContext.resume().then(() => {
-          if (audioContext) {
-            addLog(`Audio context resumed, state: ${audioContext.state}`);
-            audioState.value = audioContext.state;
+      // Send audio state to controller if connected
+      // Resume the audio context
+      const successfullyResumedOrWasRunning = await new Promise<boolean>(
+        (resolve) => {
+          if (audioContext && audioContext.state !== "running") {
+            addLog(
+              `[RESUME_AUDIO] AudioContext state is ${audioContext.state}, calling resume().`,
+            );
+            console.log(
+              `[RESUME_AUDIO] AudioContext state is ${audioContext.state}, calling resume().`,
+            );
+            audioContext.resume().then(() => {
+              if (audioContext) {
+                addLog(
+                  `[RESUME_AUDIO] Audio context resumed, state: ${audioContext.state}`,
+                );
+                console.log(
+                  `[RESUME_AUDIO] Audio context resumed, state: ${audioContext.state}`,
+                );
+                audioState.value = audioContext.state;
+              }
+              sendAudioState();
+              resolve(true);
+            }).catch((err) => {
+              addLog(
+                `[RESUME_AUDIO] Error resuming audio context: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+              console.error(
+                `[RESUME_AUDIO] Error resuming audio context:`,
+                err,
+              );
+              resolve(false);
+            });
+          } else if (audioContext) {
+            audioState.value = audioContext.state; // Already running
+            resolve(true);
+          } else {
+            addLog("AudioContext not available for resume.");
+            resolve(false); // No audioContext
           }
-          sendAudioState(); // Send updated state to controller
-        }).catch((err) => {
-          addLog(
-            `Error resuming audio context: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
-        });
-      } else if (audioContext) {
-        audioState.value = audioContext.state;
+        },
+      );
+
+      if (!successfullyResumedOrWasRunning || !audioContext) {
+        addLog(
+          "Failed to initialize or resume audio context. Audio features disabled.",
+        );
+        // Optionally, provide UI feedback about the failure
+        showAudioButton.value = true; // Show button again if failed
+        return;
       }
 
-      // Setup audio state change listener
-      if (audioContext) {
+      // Setup audio state change listener (if not already set)
+      if (audioContext && !audioContext.onstatechange) {
         audioContext.onstatechange = () => {
           if (audioContext) {
             audioState.value = audioContext.state;
             addLog(`Audio context state changed to: ${audioContext.state}`);
-            sendAudioState(); // Send updated state to controller
+            sendAudioState();
           }
         };
       }
 
-      // Mark audio as enabled and hide the button
-      isMuted.value = false; // Not muted = audio enabled
-      showAudioButton.value = false;
-
-      // If the controller had already set Note On, play a note immediately
-      // This ensures immediate sound after enabling audio if Note On is selected
-      if (wasNoteActive || isNoteActive.value) {
-        console.log(
-          "[SYNTH] Auto-playing note because controller has Note On selected",
-        );
-        noteOn(frequency.value);
-        addLog(
-          `Auto-playing note ${currentNote.value} (${frequency.value}Hz) after enabling audio`,
-        );
+      // --- Pink Noise Integration ---
+      let workletLoadSuccess = false;
+      if (!workletLoaded.value) {
+        try {
+          addLog("[WORKLET] Attempting to load AudioWorklet module...");
+          console.log("[WORKLET] Attempting to load AudioWorklet module...");
+          await audioContext.audioWorklet.addModule(
+            "/ridge_rat_type2_pink_noise_processor.js",
+          );
+          addLog(
+            "[WORKLET] AudioWorklet module ADDED successfully (before setting flags).",
+          );
+          console.log(
+            "[WORKLET] AudioWorklet module ADDED successfully (before setting flags).",
+          );
+          console.log("[WORKLET] About to set workletLoaded.value");
+          workletLoaded.value = true;
+          workletLoadSuccess = true;
+          addLog("Pink noise AudioWorklet loaded.");
+        } catch (e) {
+          addLog(
+            `[WORKLET_ERROR] Error loading pink noise worklet: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+          console.error(`[WORKLET_ERROR] Error loading pink noise worklet:`, e);
+          workletLoadSuccess = false;
+        }
+      } else {
+        workletLoadSuccess = true; // Already loaded
       }
 
-      // Send audio state to controller if connected
-      sendAudioState();
-
-      // Request current controller state to ensure we're in sync
-      // especially for note on/off status
-      if (dataChannel.value && dataChannel.value.readyState === "open") {
-        try {
-          dataChannel.value.send(JSON.stringify({
-            type: "request_current_state",
-          }));
+      if (workletLoadSuccess) {
+        if (!pinkNoiseNodeRef.current) {
+          addLog("[WORKLET_NODE] Creating AudioWorkletNode and GainNode...");
           console.log(
-            "[SYNTH] Requested current controller state after audio initialization",
+            "[WORKLET_NODE] Creating AudioWorkletNode and GainNode...",
           );
-          addLog("Requested updated controller state");
-        } catch (error) {
-          console.error("Error requesting controller state:", error);
+          try {
+            pinkNoiseNodeRef.current = new AudioWorkletNode(
+              audioContext,
+              "ridge-rat-type2-pink-noise-generator",
+            );
+            pinkNoiseGainRef.current = audioContext.createGain();
+            addLog("[WORKLET_NODE] AudioWorkletNode and GainNode CREATED.");
+            console.log(
+              "[WORKLET_NODE] AudioWorkletNode and GainNode CREATED.",
+            );
+            pinkNoiseNodeRef.current.connect(pinkNoiseGainRef.current).connect(
+              audioContext.destination,
+            );
+            addLog("[WORKLET_NODE] Nodes CONNECTED.");
+            console.log("[WORKLET_NODE] Nodes CONNECTED.");
+            addLog("Pink noise generator created.");
+          } catch (e) {
+            addLog(
+              `[WORKLET_NODE_ERROR] Error creating/connecting AudioWorkletNode: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+            console.error(
+              "[WORKLET_NODE_ERROR] Error creating/connecting AudioWorkletNode:",
+              e,
+            );
+            workletLoadSuccess = false; // Treat as failure if node creation/connection fails
+          }
+        }
+        if (pinkNoiseGainRef.current) {
+          // Ramp up gain smoothly for pink noise
+          pinkNoiseGainRef.current.gain.setValueAtTime(
+            0,
+            audioContext.currentTime,
+          );
+          pinkNoiseGainRef.current.gain.linearRampToValueAtTime(
+            0.15,
+            audioContext.currentTime + 0.1,
+          ); // Adjust volume as needed
+        }
+        pinkNoiseActive.value = true;
+        showAudioButton.value = false; // Hide "Enable Audio" button, show pink noise UI
+        isMuted.value = true; // Keep main synth muted during pink noise
+        addLog("Pink noise activated for volume calibration.");
+      } else {
+        // Fallback: Worklet failed to load, proceed as before (without pink noise)
+        addLog(
+          "Pink noise worklet failed to load. Enabling main synth directly.",
+        );
+        showAudioButton.value = false;
+        isMuted.value = false; // Unmute main synth
+        pinkNoiseSetupDone.value = true; // Skip pink noise setup step as it failed
+
+        const wasNoteActive = (globalThis as unknown as GlobalThisExtensions)
+          ._wasNoteActiveDuringAudioInit;
+        const freqAtInit = (globalThis as unknown as GlobalThisExtensions)
+          ._frequencyAtAudioInit || DEFAULT_SYNTH_PARAMS.frequency;
+        if (wasNoteActive || isNoteActive.value) { // isNoteActive might have changed via controller
+          if (audioContext && audioContext.state === "running") {
+            addLog(
+              "Restoring active note after audio enabled (pink noise fallback).",
+            );
+            // If isNoteActive is true, controller wants it on. If wasNoteActive was true, user wanted it on.
+            noteOn(isNoteActive.value ? frequency.value : freqAtInit, true); // force re-trigger
+          }
         }
       }
-
-      // No need to auto-connect here since we now connect immediately when receiving controller info
-      // Request controller info if we don't have it yet and haven't attempted a connection
-      if (!activeController.value && !autoConnectAttempted.value) {
-        requestActiveController();
-      }
-    } catch (error) {
+    } catch (e) {
       addLog(
-        `Error initializing audio context: ${
-          error instanceof Error ? error.message : String(error)
+        `Error in initAudioContext: ${
+          e instanceof Error ? e.message : String(e)
         }`,
       );
-      console.error("Audio context initialization failed:", error);
+      showAudioButton.value = true; // Ensure button is shown if there's a top-level error
     }
-  };
+  }, [
+    audioState,
+    workletLoaded,
+    pinkNoiseActive,
+    showAudioButton,
+    isMuted,
+    pinkNoiseSetupDone,
+    isNoteActive,
+    frequency,
+    filterCutoff,
+    filterResonance,
+    vibratoRate,
+    vibratoWidth,
+    waveform,
+    detune,
+  ]);
 
   // Update oscillator frequency
   const updateFrequency = (newFrequency: number) => {
@@ -1765,7 +1895,7 @@ export default function WebRTC() {
   };
 
   // Play a note with the given frequency (with attack envelope)
-  const noteOn = (noteFrequency: number) => {
+  const noteOn = (noteFrequency: number, _forceTrigger = false) => {
     console.log(`[SYNTH] noteOn called with frequency=${noteFrequency}Hz`);
 
     if (!audioContext || isMuted.value) {
@@ -2093,8 +2223,7 @@ export default function WebRTC() {
   return (
     <div class="container">
       {showAudioButton.value
-        ? (
-          // Show the Enable Audio button if audio is not yet enabled
+        ? ( // State 1: Initial "Enable Audio" screen
           <div class="audio-enable">
             <h1>WebRTC Synth</h1>
             <div class="controller-connection-info">
@@ -2128,15 +2257,41 @@ export default function WebRTC() {
             <p>Click below to enable audio (you can connect without audio).</p>
             <button
               type="button"
-              onClick={initAudioContext}
+              onClick={initAudioContext} // This now triggers pink noise first
               class="audio-button"
             >
               Enable Audio
             </button>
           </div>
         )
-        : (
-          // Show the full synth UI after audio is enabled
+        : !pinkNoiseSetupDone.value && pinkNoiseActive.value &&
+            workletLoaded.value
+        ? ( // State 2: Pink noise volume adjustment screen (only if worklet loaded successfully)
+          <div
+            class="pink-noise-setup"
+            style="text-align: center; padding: 20px;"
+          >
+            <h1>Volume Adjustment</h1>
+            <p style="margin-bottom: 20px;">
+              Pink noise is playing. Please adjust your system volume to a
+              comfortable level.
+            </p>
+            <p style="font-size: 0.8em; color: #666; margin-bottom: 20px;">
+              (Note: This pink noise is intentionally quiet. Set your system
+              volume so you can hear it clearly but comfortably.)
+            </p>
+            <button
+              type="button"
+              onClick={handleVolumeCheckDone}
+              class="audio-button" // Re-use class or make a new one
+              style="padding: 10px 20px; font-size: 1.1em;"
+            >
+              Done Adjusting Volume
+            </button>
+            {/* Optional: Add a master volume slider here for the pink noise itself if desired */}
+          </div>
+        )
+        : ( // State 3: Main synth UI (audio enabled, pink noise setup done OR skipped due to error)
           <div class="synth-ui">
             <h1>WebRTC Synth</h1>
 

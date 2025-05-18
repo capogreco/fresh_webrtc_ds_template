@@ -16,7 +16,9 @@ let oauth2Client: OAuth2Client | null = null;
 // This needs to be executed in a module context
 const initOAuth2Client = async () => {
   try {
-    const module = await import("https://deno.land/x/oauth2_client@v1.0.2/mod.ts");
+    const module = await import(
+      "https://deno.land/x/oauth2_client@v1.0.2/mod.ts"
+    );
     const OAuth2ClientClass = module.OAuth2Client;
     oauth2Client = new OAuth2ClientClass({
       clientId: Deno.env.get("GOOGLE_CLIENT_ID") || "",
@@ -102,24 +104,27 @@ export function getOAuth2Client(): OAuth2Client | null {
  */
 export async function verifySession(
   sessionId: string | null,
-  kv: Deno.Kv
+  kv: Deno.Kv,
 ): Promise<{ sessionData: { value: SessionData | null }; error?: Error }> {
   if (!sessionId) {
     return { sessionData: { value: null } };
   }
 
   try {
-    const sessionData = await kv.get<SessionData>(["webrtc:sessions", sessionId]);
-    return { 
-      sessionData: { 
-        value: sessionData.value as SessionData | null 
-      } 
+    const sessionData = await kv.get<SessionData>([
+      "webrtc:sessions",
+      sessionId,
+    ]);
+    return {
+      sessionData: {
+        value: sessionData.value as SessionData | null,
+      },
     };
   } catch (error) {
     console.error("Error accessing KV store:", error);
-    return { 
+    return {
       sessionData: { value: null },
-      error: error instanceof Error ? error : new Error(String(error))
+      error: error instanceof Error ? error : new Error(String(error)),
     };
   }
 }
@@ -129,15 +134,17 @@ export async function verifySession(
  * @param sessionData The session data from KV
  * @returns Whether the session is valid
  */
-export function isSessionValid(sessionData: { value: SessionData | null }): boolean {
+export function isSessionValid(
+  sessionData: { value: SessionData | null },
+): boolean {
   if (
-    !sessionData || 
+    !sessionData ||
     !sessionData.value ||
-    (sessionData.value && 
-     typeof sessionData.value === "object" &&
-     "expiresAt" in sessionData.value &&
-     typeof sessionData.value.expiresAt === "number" &&
-     sessionData.value.expiresAt < Date.now())
+    (sessionData.value &&
+      typeof sessionData.value === "object" &&
+      "expiresAt" in sessionData.value &&
+      typeof sessionData.value.expiresAt === "number" &&
+      sessionData.value.expiresAt < Date.now())
   ) {
     return false;
   }
@@ -158,11 +165,11 @@ export async function handleAuthRedirectsAndErrors(
   ctx: {
     render: (data: unknown, options?: { headers?: Headers }) => Response;
   },
-  options: { 
+  options: {
     sessionId?: string | null;
     sessionData?: { value: SessionData | null };
     error?: Error;
-  }
+  },
 ): Promise<Response | null> {
   const { sessionId, sessionData, error } = options;
 
@@ -178,10 +185,10 @@ export async function handleAuthRedirectsAndErrors(
   if (error) {
     // Check specifically for quota errors
     if (
-      error && 
-      typeof error === "object" && 
+      error &&
+      typeof error === "object" &&
       "message" in error &&
-      typeof error.message === "string" && 
+      typeof error.message === "string" &&
       error.message.includes("quota")
     ) {
       console.log("KV quota exceeded, redirecting to dev controller");
@@ -194,10 +201,9 @@ export async function handleAuthRedirectsAndErrors(
     return ctx.render({
       error: "Database access error. Using development version is recommended.",
       details: error.message,
-      quotaExceeded: 
-        error && 
+      quotaExceeded: error &&
         typeof error === "object" &&
-        "message" in error && 
+        "message" in error &&
         typeof error.message === "string" &&
         error.message.includes("quota"),
     });
@@ -221,7 +227,8 @@ export async function handleAuthRedirectsAndErrors(
     if (!oauth2Client) {
       console.error("OAuth client not available");
       return ctx.render({
-        error: "Authentication system unavailable. Please check server configuration.",
+        error:
+          "Authentication system unavailable. Please check server configuration.",
       });
     }
 

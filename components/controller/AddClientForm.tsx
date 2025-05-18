@@ -20,7 +20,7 @@ export function AddClientForm({
     // Context not available, use props
     clientManager = null;
   }
-  
+
   // Use context value if available, otherwise use prop
   const onAddClient = clientManager?.addClient || propAddClient;
   const newClientId = useSignal("");

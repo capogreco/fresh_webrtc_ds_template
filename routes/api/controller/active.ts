@@ -12,8 +12,7 @@ const ACTIVE_CTRL_CLIENT_ID = ["webrtc:active_ctrl_client"];
 // @ts-ignore - accessing global in Deno
 const globalThis = typeof window !== "undefined" ? window : self;
 
-// Development mode flag - set to true to bypass authentication
-const DEV_MODE = true;
+import { DEV_MODE } from "../../../lib/config.ts";
 
 // Middleware to ensure only authenticated users can access this endpoint
 async function checkAuth(req: Request): Promise<string | null> {

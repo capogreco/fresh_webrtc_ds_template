@@ -1,5 +1,5 @@
 // Preact component
-import { useSignal, computed } from "@preact/signals";
+import { computed, useSignal } from "@preact/signals";
 import { useCallback, useEffect, useMemo, useRef } from "preact/hooks";
 import { WebSocketMessage } from "./hooks/useWebSocketSignaling.ts";
 import {
@@ -133,16 +133,21 @@ export default function Controller({ user, clientId }: ControllerProps) {
     onClientDisconnected: onClientDisconnectedCallback,
     onServerError: onServerErrorCallback,
   });
-  
+
   // Computed signal for controller active state
   const controlActive = computed(() => wsSignal.isConnected.value);
 
   // Initialize client manager
   const memoizedWsSignalProp = useMemo(() => ({
-    sendMessage: (message: unknown) => wsSignal.sendMessage(message as WebSocketMessage),
+    sendMessage: (message: unknown) =>
+      wsSignal.sendMessage(message as WebSocketMessage),
   }), [wsSignal.sendMessage]); // wsSignal.sendMessage is stable from useWebSocketSignaling
 
-  const _clientManagerFromHook = useClientManager(id, memoizedWsSignalProp, addLog);
+  const _clientManagerFromHook = useClientManager(
+    id,
+    memoizedWsSignalProp,
+    addLog,
+  );
 
   // Update the ref when the client manager instance changes
   useEffect(() => {
@@ -245,7 +250,8 @@ export default function Controller({ user, clientId }: ControllerProps) {
           {controlActive.value ? "Active" : "Inactive"}
         </div>
         <div>
-          <strong>Connected Clients:</strong> {clientManagerInstanceRef.current?.connectedClientsCount.value ?? 0}
+          <strong>Connected Clients:</strong>{" "}
+          {clientManagerInstanceRef.current?.connectedClientsCount.value ?? 0}
         </div>
       </div>
 
@@ -254,7 +260,8 @@ export default function Controller({ user, clientId }: ControllerProps) {
           clients={clientManagerInstanceRef.current?.clients.value ?? new Map()}
           onConnect={clientManagerInstanceRef.current?.connectToClient ??
             (() => {})}
-          onDisconnect={clientManagerInstanceRef.current?.disconnectFromClient ??
+          onDisconnect={clientManagerInstanceRef.current
+            ?.disconnectFromClient ??
             (() => {})}
           onSynthParamChange={clientManagerInstanceRef.current
             ?.updateClientSynthParam ?? (() => {})}

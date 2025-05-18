@@ -1,43 +1,33 @@
 import { Signal, useSignal } from "@preact/signals";
 import { useCallback, useEffect } from "preact/hooks";
+import { 
+  SignalingMessage,
+  OfferMessage, 
+  AnswerMessage, 
+  IceCandidateMessage 
+} from "./useWebRTCConnection.ts";
 
 // Types for messages
-// Using 'any' for now, can be refined if message structures are more concretely defined
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface WebSocketMessage {
   type: string;
   target?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data?: unknown;
   id?: string;
   source?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: unknown; // Allow other properties
 }
 
 export interface UseWebSocketSignalingProps {
-  controllerId: Signal<string | undefined>; // The ID to register with the signaling server
+  localId?: Signal<string>; // The ID to register with the signaling server (new name)
+  controllerId?: Signal<string>; // Legacy support for old parameter name
   addLog: (logText: string) => void; // Callback to log messages in the parent component
-  onOfferReceived: (
-    message: { source: string; data: RTCSessionDescriptionInit; type: "offer" },
-  ) => void;
-  onAnswerReceived: (
-    message: {
-      source: string;
-      data: RTCSessionDescriptionInit;
-      type: "answer";
-    },
-  ) => void;
-  onIceCandidateReceived: (
-    message: {
-      source: string;
-      data: RTCIceCandidateInit;
-      type: "ice-candidate";
-    },
-  ) => void;
-  onControllerKicked: (newControllerId: string) => void;
-  onClientDisconnected: (clientId: string) => void;
-  onServerError: (errorMessage: string, details?: string) => void;
+  onSignalingMessage?: (message: SignalingMessage) => void; // General handler for all WebRTC signaling messages
+  onOfferReceived?: (message: { source: string; data: RTCSessionDescriptionInit; type: "offer" }) => void; // Legacy callback
+  onAnswerReceived?: (message: { source: string; data: RTCSessionDescriptionInit; type: "answer" }) => void; // Legacy callback
+  onIceCandidateReceived?: (message: { source: string; data: RTCIceCandidateInit; type: "ice-candidate" }) => void; // Legacy callback
+  onControllerKicked?: (newControllerId: string) => void;
+  onClientDisconnected?: (clientId: string) => void;
+  onServerError?: (errorMessage: string, details?: string) => void;
   // Add other specific message handlers as needed
 }
 
@@ -49,8 +39,10 @@ export interface UseWebSocketSignalingReturn {
 }
 
 export function useWebSocketSignaling({
+  localId,
   controllerId,
   addLog,
+  onSignalingMessage,
   onOfferReceived,
   onAnswerReceived,
   onIceCandidateReceived,
@@ -58,6 +50,9 @@ export function useWebSocketSignaling({
   onClientDisconnected,
   onServerError,
 }: UseWebSocketSignalingProps): UseWebSocketSignalingReturn {
+  // Handle backward compatibility - use localId if provided, otherwise controllerId
+  const effectiveId = localId || controllerId || useSignal("");
+    
   const socket = useSignal<WebSocket | null>(null);
   const isConnected = useSignal<boolean>(false);
   const heartbeatInterval = useSignal<number | null>(null);
@@ -69,15 +64,15 @@ export function useWebSocketSignaling({
       return Promise.resolve();
     }
 
-    // Prevent connection if controllerId is not set
-    if (typeof controllerId.value !== "string" || controllerId.value === "") {
+    // Prevent connection if effectiveId is not set
+    if (effectiveId.value === "") {
       const errorMsg =
-        `[WebSocketHook] PREVENTING CONNECTION: Invalid or missing controller ID ('${controllerId.value}'). Cannot connect to WebSocket.`;
+        `[WebSocketHook] PREVENTING CONNECTION: Invalid or missing ID ('${effectiveId.value}'). Cannot connect to WebSocket.`;
       addLog(errorMsg);
       console.error(errorMsg);
       // Immediately reject the promise and do not proceed with WebSocket creation
       return Promise.reject(
-        new Error("Invalid controller ID for WebSocket connection."),
+        new Error("Invalid ID for WebSocket connection."),
       );
     }
 
@@ -88,7 +83,7 @@ export function useWebSocketSignaling({
       const calculatedWsUrl = `${protocol}//${window.location.host}/api/signal`;
       wsUrl.value = calculatedWsUrl; // Store for later use (e.g. logging)
       addLog(
-        `[WebSocketHook] Attempting to connect to WebSocket: ${calculatedWsUrl}`,
+        `[WebSocketHook] Attempting to connect to WebSocket: ${calculatedWsUrl} with ID: ${effectiveId.value}`,
       );
       const ws = new WebSocket(calculatedWsUrl);
 
@@ -97,32 +92,30 @@ export function useWebSocketSignaling({
         isConnected.value = true;
         addLog(
           `[WebSocketHook] Signaling server connected (WebSocket opened to ${calculatedWsUrl}). Registering with ID: ${
-            controllerId.value || "undefined!"
+            effectiveId.value || "undefined!"
           }`,
         );
 
         try {
-          if (
-            typeof controllerId.value !== "string" || controllerId.value === ""
-          ) {
-            const errorMsg =
-              `[WebSocketHook] [CRITICAL] Registration aborted: Invalid or missing controller ID ('${controllerId.value}') at the time of onopen. Closing WebSocket.`;
-            addLog(errorMsg);
-            console.error(errorMsg);
-            ws.close(1008, "Invalid controller ID for registration."); // 1008: Policy Violation
-            reject(
-              new Error("Invalid controller ID for registration at onopen."),
-            ); // Reject the connect promise
-            return; // Do not proceed to send
+          if (effectiveId.value === "") {
+              const errorMsg =
+                `[WebSocketHook] [CRITICAL] Registration aborted: Invalid or missing ID ('${effectiveId.value}') at the time of onopen. Closing WebSocket.`;
+              addLog(errorMsg);
+              console.error(errorMsg);
+              ws.close(1008, "Invalid ID for registration."); // 1008: Policy Violation
+              reject(
+                new Error("Invalid ID for registration at onopen."),
+              ); // Reject the connect promise
+              return; // Do not proceed to send
           }
 
           ws.send(JSON.stringify({
-            type: "register",
-            id: controllerId.value, // id.value might still be undefined if not set by parent before onopen
-          }));
-          addLog(
-            `[WebSocketHook] Sent register message with ID: ${controllerId.value}`,
-          );
+              type: "register",
+              id: effectiveId.value,
+            }));
+            addLog(
+              `[WebSocketHook] Sent register message with ID: ${effectiveId.value}`,
+            );
 
           if (heartbeatInterval.value !== null) {
             clearInterval(heartbeatInterval.value);
@@ -211,49 +204,39 @@ export function useWebSocketSignaling({
               addLog(
                 `[WebSocketHook] Controller kicked. New controller: ${parsedMessage.newControllerId}`,
               );
-              onControllerKicked(parsedMessage.newControllerId as string);
+              if (onControllerKicked) {
+                onControllerKicked(parsedMessage.newControllerId as string);
+              }
               break;
             case "offer":
-              addLog(
-                `[WebSocketHook] Received offer from: ${parsedMessage.source}`,
-              );
-              onOfferReceived(
-                parsedMessage as {
-                  source: string;
-                  data: RTCSessionDescriptionInit;
-                  type: "offer";
-                },
-              );
-              break;
             case "answer":
-              addLog(
-                `[WebSocketHook] Received answer from: ${parsedMessage.source}`,
-              );
-              onAnswerReceived(
-                parsedMessage as {
-                  source: string;
-                  data: RTCSessionDescriptionInit;
-                  type: "answer";
-                },
-              );
-              break;
             case "ice-candidate":
+              const messageType = parsedMessage.type;
               addLog(
-                `[WebSocketHook] Received ICE candidate from: ${parsedMessage.source}`,
+                `[WebSocketHook] Received ${messageType} from: ${parsedMessage.source}`,
               );
-              onIceCandidateReceived(
-                parsedMessage as {
-                  source: string;
-                  data: RTCIceCandidateInit;
-                  type: "ice-candidate";
-                },
-              );
+              
+              // Forward to onSignalingMessage handler if provided
+              if (onSignalingMessage) {
+                // Use the new handler if available
+                onSignalingMessage(parsedMessage as SignalingMessage);
+              }
+              // Also use legacy handlers if provided (for backward compatibility)
+              else if (parsedMessage.type === "offer" && onOfferReceived) {
+                onOfferReceived(parsedMessage as { source: string; data: RTCSessionDescriptionInit; type: "offer" });
+              } else if (parsedMessage.type === "answer" && onAnswerReceived) {
+                onAnswerReceived(parsedMessage as { source: string; data: RTCSessionDescriptionInit; type: "answer" });
+              } else if (parsedMessage.type === "ice-candidate" && onIceCandidateReceived) {
+                onIceCandidateReceived(parsedMessage as { source: string; data: RTCIceCandidateInit; type: "ice-candidate" });
+              }
               break;
             case "client-disconnected":
               addLog(
                 `[WebSocketHook] Client ${parsedMessage.clientId} reported disconnection.`,
               );
-              onClientDisconnected(parsedMessage.clientId as string);
+              if (onClientDisconnected) {
+                onClientDisconnected(parsedMessage.clientId as string);
+              }
               break;
             case "error": // Server-originated error messages
               console.error(
@@ -266,10 +249,12 @@ export function useWebSocketSignaling({
                   parsedMessage.details || ""
                 }`,
               );
-              onServerError(
-                parsedMessage.message as string,
-                parsedMessage.details as string | undefined,
-              );
+              if (onServerError) {
+                onServerError(
+                  parsedMessage.message as string,
+                  parsedMessage.details as string | undefined,
+                );
+              }
               break;
             default:
               addLog(
@@ -295,11 +280,12 @@ export function useWebSocketSignaling({
       };
     });
   }, [
-    controllerId,
+    effectiveId,
     addLog,
     socket,
     heartbeatInterval,
     wsUrl,
+    onSignalingMessage,
     onOfferReceived,
     onAnswerReceived,
     onIceCandidateReceived,

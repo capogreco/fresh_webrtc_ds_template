@@ -20,7 +20,7 @@ export function BroadcastMessageForm({
     // Context not available, use props
     clientManager = null;
   }
-  
+
   // Use context value if available, otherwise use prop
   const onSend = clientManager?.broadcastMessage || propOnSend;
   const messageText = useSignal("");

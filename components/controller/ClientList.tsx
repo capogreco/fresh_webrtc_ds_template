@@ -21,12 +21,14 @@ export function ClientList(props: ClientListProps) {
     // Context not available, use props
     clientManager = null;
   }
-  
+
   // Use context values if available, otherwise use props
   const clients = clientManager?.clients.value || props.clients;
   const onConnect = clientManager?.connectToClient || props.onConnect;
-  const onDisconnect = clientManager?.disconnectFromClient || props.onDisconnect;
-  const onSynthParamChange = clientManager?.updateClientSynthParam || props.onSynthParamChange;
+  const onDisconnect = clientManager?.disconnectFromClient ||
+    props.onDisconnect;
+  const onSynthParamChange = clientManager?.updateClientSynthParam ||
+    props.onSynthParamChange;
   const clientsArray = Array.from(clients.entries());
 
   if (clientsArray.length === 0) {
