@@ -1,74 +1,15 @@
 // Preact component
+import { h } from "preact";
 import type { Handlers, PageProps } from "../../lib/types/fresh.ts";
-import { OAuth2Client } from "https://deno.land/x/oauth2_client@v1.0.2/mod.ts";
 import Controller from "../../islands/Controller.tsx";
-import KickControllerButton from "../../islands/KickControllerButton.tsx";
 import { getCookieValue } from "../../lib/utils/cookies.ts";
-
-// OAuth configuration
-// Manually construct Google OAuth URL function to avoid stringify issues
-function getGoogleAuthUrl() {
-  try {
-    const clientId = Deno.env.get("GOOGLE_CLIENT_ID") || "";
-    if (!clientId) {
-      console.error("Missing GOOGLE_CLIENT_ID environment variable");
-      return "";
-    }
-
-    const redirectUri = `${
-      Deno.env.get("BASE_URL") || "http://localhost:8000"
-    }/ctrl/callback`;
-    const scope = "email profile";
-
-    // Debug logging
-    console.log("BASE_URL env:", Deno.env.get("BASE_URL"));
-    console.log("Calculated redirectUri:", redirectUri);
-
-    // Generate a random state parameter to prevent CSRF
-    const state = crypto.randomUUID();
-
-    // Build the URL manually
-    const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    url.searchParams.append("client_id", clientId);
-    url.searchParams.append("redirect_uri", redirectUri);
-    url.searchParams.append("response_type", "code");
-    url.searchParams.append("scope", scope);
-    url.searchParams.append("state", state);
-    url.searchParams.append("access_type", "offline");
-    url.searchParams.append("prompt", "consent");
-
-    // More detailed debug output
-    console.log("Generated manual auth URL:", url.toString());
-    console.log("URL parameters:");
-    url.searchParams.forEach((value, key) => {
-      console.log(`  ${key}: ${value}`);
-    });
-
-    return url.toString();
-  } catch (error) {
-    console.error("Error generating Google Auth URL:", error);
-    return "";
-  }
-}
-
-// Initialize OAuth client safely
-let oauth2Client: OAuth2Client | null = null;
-try {
-  oauth2Client = new OAuth2Client({
-    clientId: Deno.env.get("GOOGLE_CLIENT_ID") || "",
-    clientSecret: Deno.env.get("GOOGLE_CLIENT_SECRET") || "",
-    authorizationEndpointUri: "https://accounts.google.com/o/oauth2/v2/auth",
-    tokenUri: "https://oauth2.googleapis.com/token",
-    redirectUri: `${
-      Deno.env.get("BASE_URL") || "http://localhost:8000"
-    }/ctrl/callback`,
-    defaults: {
-      scope: "email profile",
-    },
-  });
-} catch (error) {
-  console.error("Error initializing OAuth client:", error);
-}
+import { 
+  verifySession, 
+  handleAuthRedirectsAndErrors 
+} from "../../lib/authUtils.ts";
+import ErrorDisplayPage from "../../components/controller/page_states/ErrorDisplayPage.tsx";
+import LoginPageView from "../../components/controller/page_states/LoginPageView.tsx";
+import ControllerActiveElsewherePage from "../../components/controller/page_states/ControllerActiveElsewherePage.tsx";
 
 // Allowed email(s) that can access the controller
 const _ALLOWED_EMAILS = [
@@ -120,101 +61,19 @@ export const handler: Handlers = {
         "session",
       );
 
-      // Make sure KV is available
-      if (!kv) {
-        console.error("KV store is not available");
-        return ctx.render({
-          error:
-            "Database connection failed. Please check server configuration.",
-        });
-      }
-
-      if (!sessionId) {
-        // User is not logged in, create authorization URI using our manual function
-        const loginUrl = getGoogleAuthUrl();
-
-        // Show a login page with a button instead of automatic redirect
-        return ctx.render({
-          needsLogin: true,
-          loginUrl: loginUrl,
-        });
-      }
-
       // Verify the session
-      let sessionData;
-      try {
-        sessionData = await kv.get(["webrtc:sessions", sessionId]);
-      } catch (error) {
-        console.error("Error accessing KV store:", error);
-
-        // Check specifically for quota errors
-        if (
-          error && typeof error === "object" && "message" in error &&
-          typeof error.message === "string" && error.message.includes("quota")
-        ) {
-          console.log("KV quota exceeded, redirecting to dev controller");
-          return new Response(null, {
-            status: 302,
-            headers: { Location: "/ctrl/dev" },
-          });
-        }
-
-        return ctx.render({
-          error:
-            "Database access error. Using development version is recommended.",
-          details: error && typeof error === "object" && "message" in error
-            ? error.message
-            : String(error),
-          quotaExceeded: error && typeof error === "object" &&
-            "message" in error && typeof error.message === "string" &&
-            error.message.includes("quota"),
-        });
-      }
-
-      if (
-        !sessionData || !sessionData.value ||
-        (sessionData.value && typeof sessionData.value === "object" &&
-          "expiresAt" in sessionData.value &&
-          typeof sessionData.value.expiresAt === "number" &&
-          sessionData.value.expiresAt < Date.now())
-      ) {
-        // Session is invalid or expired
-        if (!oauth2Client) {
-          console.error("OAuth client not available");
-          return ctx.render({
-            error:
-              "Authentication system unavailable. Please check server configuration.",
-          });
-        }
-
-        const authorizationUri = await oauth2Client.code.getAuthorizationUri();
-
-        // Convert the URI to a string
-        const loginUrl = authorizationUri.toString();
-
-        // Debug logging for the expired session case
-        console.log("===== EXPIRED SESSION AUTH DEBUG =====");
-        console.log("Generated login URL (expired session):", loginUrl);
-        console.log("Current oauth2Client config:", {
-          clientId: Deno.env.get("GOOGLE_CLIENT_ID") ? "Set" : "Not set",
-          redirectUri: oauth2Client && "redirectUri" in oauth2Client
-            ? oauth2Client.redirectUri
-            : "unknown",
-        });
-
-        // Clear the invalid session cookie
-        const headers = new Headers();
-        headers.set(
-          "Set-Cookie",
-          "session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-        );
-
-        // Show login page with message about expired session
-        return ctx.render({
-          needsLogin: true,
-          loginUrl: loginUrl,
-          sessionExpired: true,
-        }, { headers });
+      const { sessionData, error } = await verifySession(sessionId, kv!);
+      
+      // Handle authentication redirects and errors
+      const authResponse = await handleAuthRedirectsAndErrors(req, kv!, ctx, {
+        sessionId,
+        sessionData,
+        error,
+      });
+      
+      // If authResponse is not null, it means we need to handle an auth related response
+      if (authResponse) {
+        return authResponse;
       }
 
       // Generate a unique client ID for this controller session or use the forced one from kick
@@ -224,7 +83,7 @@ export const handler: Handlers = {
       // Check if there's an active controller
       let activeControllerClientId;
       try {
-        activeControllerClientId = await kv.get(ACTIVE_CTRL_CLIENT_ID);
+        activeControllerClientId = await kv!.get(ACTIVE_CTRL_CLIENT_ID);
       } catch (error) {
         console.error("Error checking active controller:", error);
         // If it's a quota error, just proceed with no active controller
@@ -235,7 +94,7 @@ export const handler: Handlers = {
       if (forceActive && forcedClientId && forcedClientId === clientId) {
         console.log(`Force activating controller with client ID: ${clientId}`);
         try {
-          await kv.set(ACTIVE_CTRL_CLIENT_ID, clientId);
+          await kv!.set(ACTIVE_CTRL_CLIENT_ID, clientId);
           activeControllerClientId = { value: clientId };
         } catch (error) {
           console.error("Error forcing controller activation:", error);
@@ -275,135 +134,44 @@ export const handler: Handlers = {
 export default function ControllerPage({ data }: PageProps) {
   // Check for server error
   if (data && typeof data === "object" && "error" in data) {
+    const typedData = data as Record<string, unknown>;
+    const errorData = {
+      error: String(typedData.error),
+      details: "details" in typedData && typedData.details ? String(typedData.details) : undefined,
+      stack: "stack" in typedData && typedData.stack ? String(typedData.stack) : undefined,
+      quotaExceeded: "quotaExceeded" in typedData && typedData.quotaExceeded ? true : false
+    };
     return (
-      <div class="container">
-        <h1>Error</h1>
-
-        {data && typeof data === "object" && "quotaExceeded" in data &&
-            data.quotaExceeded
-          ? (
-            <div style="background-color: #ffe8cc; color: #7d4a00; padding: 16px; border-radius: 4px; margin-bottom: 20px; border: 1px solid #ffb459;">
-              <h3 style="margin-top: 0;">Deno KV Quota Exceeded</h3>
-              <p>
-                The application has reached its database read limit. The
-                development version will still work properly without requiring
-                database access.
-              </p>
-            </div>
-          )
-          : (
-            <p>
-              {data && typeof data === "object" && "error" in data &&
-                  data.error !== undefined
-                ? String(data.error)
-                : "Unknown error"}
-            </p>
-          )}
-
-        {data && typeof data === "object" && "details" in data &&
-          data.details && (
-          <div style="margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 4px;">
-            <p>
-              <strong>Details:</strong>{" "}
-              {data && typeof data === "object" && "details" in data
-                ? data.details
-                : ""}
-            </p>
-            {data && typeof data === "object" && "stack" in data &&
-              data.stack && (
-              <pre style="margin-top: 10px; white-space: pre-wrap; overflow-x: auto; font-size: 12px; background-color: #f0f0f0; padding: 10px; border-radius: 4px;">
-                {data && typeof data === "object" && "stack" in data ? data.stack : ""}
-              </pre>
-            )}
-          </div>
-        )}
-        <div style="margin-top: 20px;">
-          <a
-            href="/ctrl/dev"
-            class="activate-button"
-            style="text-decoration: none; display: inline-block;"
-          >
-            Use Development Version
-          </a>
-        </div>
-      </div>
+      <ErrorDisplayPage 
+        error={errorData.error}
+        details={errorData.details}
+        stack={errorData.stack}
+        quotaExceeded={errorData.quotaExceeded}
+      />
     );
   }
 
   // Make sure data is properly formatted
   if (!data || typeof data !== "object") {
     return (
-      <div class="container">
-        <h1>Error</h1>
-        <p>Invalid data format. Please try again.</p>
-        <div style="margin-top: 20px;">
-          <a
-            href="/ctrl/dev"
-            class="activate-button"
-            style="text-decoration: none; display: inline-block;"
-          >
-            Try Development Version
-          </a>
-        </div>
-      </div>
+      <ErrorDisplayPage 
+        error={"Invalid data format. Please try again."}
+      />
     );
   }
 
   // Check if we need to show the login page
   if (data && typeof data === "object" && "needsLogin" in data) {
+    const typedData = data as Record<string, unknown>;
+    const loginData = {
+      loginUrl: "loginUrl" in typedData && typedData.loginUrl ? String(typedData.loginUrl) : "",
+      sessionExpired: "sessionExpired" in typedData && typedData.sessionExpired ? true : false
+    };
     return (
-      <div class="container" style="max-width: 500px; text-align: center;">
-        <h1>WebRTC Controller Login</h1>
-
-        {data && typeof data === "object" && "sessionExpired" in data &&
-            data.sessionExpired
-          ? (
-            <div
-              class="alert"
-              style="margin-bottom: 20px; color: #e53e3e; background-color: rgba(229, 62, 62, 0.1); padding: 12px; border-radius: 4px; border: 1px solid #e53e3e;"
-            >
-              Your session has expired. Please log in again.
-            </div>
-          )
-          : (
-            <p>
-              Please log in with your Google account to access the controller
-              interface.
-            </p>
-          )}
-
-        <div style="margin-top: 30px;">
-          {data && typeof data === "object" && "loginUrl" in data &&
-              data.loginUrl
-            ? (
-              <a
-                href={data && typeof data === "object" && "loginUrl" in data &&
-                    data.loginUrl
-                  ? String(data.loginUrl)
-                  : "#"}
-                class="activate-button"
-                style="text-decoration: none; display: inline-block;"
-              >
-                Login with Google
-              </a>
-            )
-            : (
-              <div>
-                <p style="color: #e53e3e;">
-                  Unable to generate login URL. OAuth configuration may be
-                  incomplete.
-                </p>
-                <a
-                  href="/ctrl/dev"
-                  class="activate-button"
-                  style="text-decoration: none; display: inline-block; margin-top: 20px;"
-                >
-                  Use Development Version
-                </a>
-              </div>
-            )}
-        </div>
-      </div>
+      <LoginPageView
+        loginUrl={loginData.loginUrl}
+        sessionExpired={loginData.sessionExpired}
+      />
     );
   }
 
@@ -466,19 +234,11 @@ export default function ControllerPage({ data }: PageProps) {
   // If a controller is active and it's not this client
   if (isControllerActive && !isCurrentClient) {
     return (
-      <div class="container">
-        <h1>Controller Already Active</h1>
-        <p>
-          Another controller client is already active.
-        </p>
-        <div style="margin-top: 20px;">
-          <KickControllerButton
-            user={typedUser}
-            clientId={typedClientId}
-            activeControllerClientId={typedActiveControllerClientId}
-          />
-        </div>
-      </div>
+      <ControllerActiveElsewherePage
+        user={typedUser}
+        clientId={typedClientId}
+        activeControllerClientId={typedActiveControllerClientId}
+      />
     );
   }
 
