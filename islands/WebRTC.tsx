@@ -6,11 +6,15 @@ import {
   setupWakeLockListeners,
   type WakeLockSentinel,
 } from "../lib/utils/wakeLock.ts";
-import { PARAM_DESCRIPTORS } from "../lib/synth/index.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
 import { fetchIceServers } from "../lib/webrtc.ts";
 import { useAudioEngine } from "./hooks/useAudioEngine.ts";
 import Synth from "./Synth.tsx";
+import {
+  ControllerMode,
+  KNOWN_CONTROLLER_MODES,
+} from "../shared/controllerModes.ts";
+import { DEV_MODE } from "../lib/config.ts";
 
 // Extend the window object for Web Audio API
 declare global {
@@ -26,7 +30,6 @@ interface GlobalThisExtensions {
 }
 
 // Type definitions for abstracted functionality
-type ParamHandler = (value: unknown, source?: string) => void;
 type MessageHandler = (event: MessageEvent, channel: RTCDataChannel) => void;
 
 // Specific types for signaling messages
@@ -66,6 +69,11 @@ export default function WebRTC() {
   const activeController = useSignal<string | null>(null);
   const autoConnectAttempted = useSignal(false);
 
+  // Controller mode state
+  const controllerMode = useSignal<ControllerMode>(
+    KNOWN_CONTROLLER_MODES.DEFAULT,
+  );
+
   // UI control state
   const showAudioButton = useSignal(true); // Start by showing the enable audio button
   const wakeLock = useSignal<WakeLockSentinel | null>(null); // Wake lock sentinel reference
@@ -80,12 +88,12 @@ export default function WebRTC() {
     }, 0);
   };
 
-  // Initialize audio engine using the useAudioEngine hook
-  const audio = useAudioEngine(addLog);
+  // Initialize audio engine using the useAudioEngine hook with controller mode
+  const audio = useAudioEngine(addLog, controllerMode);
 
-  // Handler for when user finishes pink noise volume adjustment
+  // Handler for when user completes volume check
   const handleVolumeCheckDone = useCallback(() => {
-    audio.handleVolumeCheckDone();
+    audio.confirmVolumeCheckComplete();
     showAudioButton.value = false; // Hide the enable audio button
   }, []);
 
@@ -126,6 +134,7 @@ export default function WebRTC() {
         type: "audio_state",
         isMuted: audio.isMuted.value,
         audioState: audio.audioContextState.value,
+        controllerMode: audio.activeControllerMode.value,
       }));
 
       addLog("Sent synth parameters and audio state to controller");
@@ -142,6 +151,7 @@ export default function WebRTC() {
         isMuted: true, // Audio is muted
         audioState: "disabled",
         pendingNote: audio.isNoteActive.value, // Let controller know if there's a pending note
+        controllerMode: audio.activeControllerMode.value, // Send current mode
       }));
       addLog("Sent audio state to controller (audio not enabled)");
     } catch (error) {
@@ -211,7 +221,6 @@ export default function WebRTC() {
     }
   };
 
-  // Unified parameter handler map
   // Function to send parameter updates to controller
   const sendParamToController = (param: string, value: unknown) => {
     if (dataChannel.value && dataChannel.value.readyState === "open") {
@@ -225,117 +234,6 @@ export default function WebRTC() {
         console.error(`Error sending ${param} update:`, error);
       }
     }
-  };
-
-  const paramHandlers: Record<string, ParamHandler> = {
-    frequency: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.frequency.validate(Number(value));
-      audio.updateSynthParam("frequency", validValue);
-      sendParamToController("frequency", validValue);
-      addLog(`Frequency updated to ${validValue}Hz by ${source}`);
-    },
-    waveform: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.waveform.validate(value);
-      audio.updateSynthParam("waveform", validValue);
-      sendParamToController("waveform", validValue);
-      addLog(`Waveform updated to ${validValue} by ${source}`);
-    },
-    volume: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.volume.validate(Number(value));
-      audio.updateSynthParam("volume", validValue);
-      sendParamToController("volume", validValue);
-      addLog(`Volume updated to ${validValue} by ${source}`);
-    },
-    detune: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.detune.validate(Number(value));
-      audio.updateSynthParam("detune", validValue);
-      sendParamToController("detune", validValue);
-      addLog(`Detune updated to ${validValue} cents by ${source}`);
-    },
-    oscillatorEnabled: (value, source = "controller") => {
-      const enabled = PARAM_DESCRIPTORS.oscillatorEnabled.validate(value);
-      // Handle as note on/off
-      if (enabled) {
-        audio.playNote(audio.frequency.value);
-        // Send note_on state to controller if connected
-        if (dataChannel.value && dataChannel.value.readyState === "open") {
-          try {
-            dataChannel.value.send(JSON.stringify({
-              type: "note_on",
-              frequency: audio.frequency.value,
-            }));
-          } catch (error) {
-            console.error("Error sending note_on:", error);
-          }
-        }
-      } else {
-        audio.stopNote();
-        // Send note_off to controller if connected
-        if (dataChannel.value && dataChannel.value.readyState === "open") {
-          try {
-            dataChannel.value.send(JSON.stringify({
-              type: "note_off",
-            }));
-          } catch (error) {
-            console.error("Error sending note_off state:", error);
-          }
-        }
-      }
-      addLog(`Note ${enabled ? "on" : "off"} by ${source}`);
-    },
-    attack: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.attack.validate(Number(value));
-      audio.updateSynthParam("attack", validValue);
-      sendParamToController("attack", validValue);
-      addLog(`Attack updated to ${validValue}s by ${source}`);
-    },
-    release: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.release.validate(Number(value));
-      audio.updateSynthParam("release", validValue);
-      sendParamToController("release", validValue);
-      addLog(`Release updated to ${validValue}s by ${source}`);
-    },
-    filterCutoff: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.filterCutoff.validate(Number(value));
-      audio.updateSynthParam("filterCutoff", validValue);
-      sendParamToController("filterCutoff", validValue);
-      addLog(`Filter cutoff updated to ${validValue}Hz by ${source}`);
-    },
-    filterResonance: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.filterResonance.validate(
-        Number(value),
-      );
-      audio.updateSynthParam("filterResonance", validValue);
-      sendParamToController("filterResonance", validValue);
-      addLog(`Filter resonance updated to ${validValue} by ${source}`);
-    },
-    vibratoRate: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.vibratoRate.validate(Number(value));
-      audio.updateSynthParam("vibratoRate", validValue);
-      sendParamToController("vibratoRate", validValue);
-      addLog(`Vibrato rate updated to ${validValue}Hz by ${source}`);
-    },
-    vibratoWidth: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.vibratoWidth.validate(Number(value));
-      audio.updateSynthParam("vibratoWidth", validValue);
-      sendParamToController("vibratoWidth", validValue);
-      addLog(`Vibrato width updated to ${validValue} cents by ${source}`);
-    },
-    portamentoTime: (value, source = "controller") => {
-      const validValue = PARAM_DESCRIPTORS.portamentoTime.validate(
-        Number(value),
-      );
-      audio.updateSynthParam("portamentoTime", validValue);
-      sendParamToController("portamentoTime", validValue);
-      addLog(`Portamento time updated to ${validValue}s by ${source}`);
-    },
-    note: (value, source = "controller") => {
-      // Handle note name directly using audio engine
-      audio.playNoteByName(value as string);
-      // Send to controller if connected
-      sendParamToController("note", value);
-      addLog(`Note ${value} (${audio.frequency.value}Hz) set by ${source}`);
-    },
   };
 
   // Unified channel message handler
@@ -353,11 +251,11 @@ export default function WebRTC() {
 
         // Handle synth parameter update messages
         if (message.type === "synth_param") {
-          const param = message.param;
+          const paramId = message.param;
           const value = message.value;
 
           // Special handling for oscillatorEnabled - control note on/off
-          if (param === "oscillatorEnabled") {
+          if (paramId === "oscillatorEnabled") {
             console.log(
               `[SYNTH] Received oscillatorEnabled=${value}, current isNoteActive=${audio.isNoteActive.value}, isMuted=${audio.isMuted.value}`,
             );
@@ -371,12 +269,12 @@ export default function WebRTC() {
                 );
                 audio.playNote(audio.frequency.value);
                 addLog(
-                  `Playing note ${audio.currentNote.value} (${audio.frequency.value}Hz) due to controller setting`,
+                  `Playing note at ${audio.frequency.value}Hz due to controller setting`,
                 );
               } else {
                 // If audio not ready or muted, log the note request and notify controller
                 addLog(
-                  `Note ${audio.currentNote.value} requested but audio not enabled or muted`,
+                  `Note requested but audio not enabled or muted`,
                 );
 
                 // Let controller know that audio is muted but note is pending
@@ -400,15 +298,11 @@ export default function WebRTC() {
             }
           }
 
-          if (paramHandlers[param]) {
-            paramHandlers[param](
-              value,
-              prefix ? `${prefix} controller` : "controller",
-            );
-          } else {
-            console.warn(`Unknown synth parameter: ${param}`);
-            addLog(`Unknown synth parameter: ${param}`);
-          }
+          // Forward all parameters directly to the audio engine
+          addLog(
+            `Synth Client: Received synth_param: ${paramId} = ${value}. Forwarding to audio engine.`,
+          );
+          audio.updateSynthParam(paramId, value);
           return;
         }
 
@@ -449,6 +343,43 @@ export default function WebRTC() {
         if (message.type === "note_off") {
           // Release the current note
           audio.stopNote();
+          return;
+        }
+
+        // Handle controller mode change messages
+        if (message.type === "controller_mode") {
+          addLog(
+            `[DEBUG_MODE_CHANGE] WebRTC: Received controller_mode_update, mode: ${message.mode}`,
+          );
+
+          if (
+            message.mode &&
+            Object.values(KNOWN_CONTROLLER_MODES).includes(message.mode)
+          ) {
+            addLog(
+              `[DEBUG_MODE_CHANGE] WebRTC: Setting controllerMode.value to ${message.mode}`,
+            );
+            controllerMode.value = message.mode as ControllerMode;
+            addLog(`Controller mode changed to: ${message.mode}`);
+
+            // Pass along initial parameters if provided
+            if (message.initialParams) {
+              addLog(
+                `[DEBUG_MODE_CHANGE] WebRTC: Calling audio.setControllerMode with initialParams`,
+              );
+              audio.setControllerMode(
+                message.mode as ControllerMode,
+                message.initialParams,
+              );
+            } else {
+              addLog(
+                `[DEBUG_MODE_CHANGE] WebRTC: Calling audio.setControllerMode without initialParams`,
+              );
+              audio.setControllerMode(message.mode as ControllerMode);
+            }
+          } else {
+            addLog(`Invalid controller mode received: ${message.mode}`);
+          }
           return;
         }
 
@@ -516,13 +447,20 @@ export default function WebRTC() {
       }
 
       // Request current controller state to ensure we're in sync
-      // especially for note on/off status
+      // especially for note on/off status and controller mode
       try {
         console.log("[SYNTH] Requesting current controller state");
         channel.send(JSON.stringify({
           type: "request_current_state",
         }));
         addLog("Requested current controller state");
+
+        // Also request the current controller mode specifically
+        console.log("[DEBUG_MODE_CHANGE] Requesting current controller mode");
+        channel.send(JSON.stringify({
+          type: "request_controller_mode",
+        }));
+        addLog("[DEBUG_MODE_CHANGE] Requested current controller mode");
       } catch (error) {
         console.error("Error requesting controller state:", error);
       }
@@ -1022,16 +960,14 @@ export default function WebRTC() {
   const initAudioContext = useCallback(async () => {
     try {
       // Initialize the audio context
+      // Default Mode will automatically start in volume check mode
       await audio.initializeAudioContext();
-
-      // Start pink noise for volume check
-      audio.startPinkNoise(0.15);
 
       // Update UI state
       showAudioButton.value = false;
 
       // Log success
-      addLog("Audio initialized and pink noise started for volume check");
+      addLog("Audio initialized with integrated volume check mode");
     } catch (e) {
       addLog(
         `Error initializing audio: ${
@@ -1068,14 +1004,69 @@ export default function WebRTC() {
       // Only refresh if we're not connected to avoid unnecessary requests
       if (!connected.value) {
         requestActiveController();
+      } else {
+        // If connected, periodically check/request controller mode to ensure we're in sync
+        addLog(
+          "[DEBUG_MODE_CHANGE] Periodic mode check: Current mode=" +
+            controllerMode.value,
+        );
+        if (dataChannel.value && dataChannel.value.readyState === "open") {
+          try {
+            dataChannel.value.send(JSON.stringify({
+              type: "request_controller_mode",
+            }));
+            addLog(
+              "[DEBUG_MODE_CHANGE] Sent request_controller_mode message to controller",
+            );
+          } catch (error) {
+            console.error("Error requesting controller mode:", error);
+          }
+        }
       }
-    }, 30000); // Refresh every 30 seconds
+    }, 10000); // Refresh every 10 seconds
+
+    // Listen for Default Mode test events
+    const handleDefaultModeTest = (event: CustomEvent<any>) => {
+      console.log("Received Default Mode test event:", event.detail);
+
+      if (event.detail.type === "controller_mode") {
+        // Handle mode change
+        controllerMode.value = event.detail.mode;
+        addLog(`Test: Mode changed to ${event.detail.mode}`);
+      } else if (event.detail.type === "synth_param") {
+        // Handle parameter change
+        const param = event.detail.param;
+        const value = event.detail.value;
+
+        // Simulate a parameter message from the controller
+        // This will trigger the same processing as if it came from WebRTC
+        handleChannelMessage(
+          {
+            data: JSON.stringify({ type: "synth_param", param, value }),
+          } as MessageEvent,
+          { readyState: "open", send: () => {} } as RTCDataChannel,
+          "TEST",
+        );
+      }
+    };
+
+    // Add event listener for test events
+    window.addEventListener(
+      "default-mode-test",
+      handleDefaultModeTest as EventListener,
+    );
 
     // Cleanup function
     return () => {
       // Clear intervals
       clearInterval(reconnectionInterval);
       clearInterval(controllerRefreshInterval);
+
+      // Remove test event listener
+      window.removeEventListener(
+        "default-mode-test",
+        handleDefaultModeTest as EventListener,
+      );
 
       // Release wake lock
       if (wakeLock.value) {
@@ -1148,13 +1139,13 @@ export default function WebRTC() {
         )
         : ( // New Combined State 2: Audio Enabled - Adjusting Volume / Using Synth
           <div class="synth-and-volume-adjust-ui">
-            {/* Conditionally render Pink Noise UI elements */}
-            {audio.pinkNoiseActive.value && !audio.pinkNoiseSetupDone.value && (
+            {/* Conditionally render Volume Check UI elements */}
+            {audio.isVolumeCheckPending.value && (
               <div
-                class="pink-noise-setup"
+                class="volume-check-active-default-mode"
                 style="text-align: center; padding: 20px; border-bottom: 1px solid #eee; margin-bottom: 20px;"
               >
-                <h1>Volume Adjustment</h1>
+                <h1>Volume Adjustment ({audio.activeControllerMode.value} Mode)</h1>
                 <p style="margin-bottom: 20px;">
                   Pink noise is playing. Please adjust your system volume to a
                   comfortable level.
@@ -1194,6 +1185,11 @@ export default function WebRTC() {
                     class={`audio-status audio-${audio.audioContextState.value}`}
                   >
                     Audio: {audio.audioContextState.value}
+                  </span>
+                  <span
+                    class={`controller-mode ${audio.activeControllerMode.value}`}
+                  >
+                    Mode: {audio.activeControllerMode.value}
                   </span>
                   <span
                     class={`wake-lock-status ${
@@ -1271,6 +1267,58 @@ export default function WebRTC() {
                 >
                   Send
                 </button>
+              </div>
+
+              {/* Mode indicator and debugger UI */}
+              <div class="mode-selector">
+                <h3>Controller Mode</h3>
+                <div class="mode-info">
+                  <p>
+                    Current mode:{" "}
+                    <span
+                      class={`mode-display ${audio.activeControllerMode.value}`}
+                    >
+                      {audio.activeControllerMode.value}
+                    </span>
+                  </p>
+                  {!DEV_MODE && (
+                    <p class="mode-info-text">
+                      The controller determines the active mode. This display is
+                      for information only.
+                    </p>
+                  )}
+                </div>
+
+                {/* Debug UI only visible in DEV_MODE */}
+                {DEV_MODE && (
+                  <div class="mode-debug">
+                    <p class="dev-mode-label">DEVELOPMENT MODE ONLY</p>
+                    <div class="mode-buttons">
+                      {Object.values(KNOWN_CONTROLLER_MODES).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          class={`mode-button ${
+                            audio.activeControllerMode.value === mode
+                              ? "active"
+                              : ""
+                          }`}
+                          onClick={() => {
+                            // In dev mode, directly update the controller mode signal
+                            controllerMode.value = mode;
+                            addLog(`DEV: Manually set mode to ${mode}`);
+                          }}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                    </div>
+                    <p class="dev-mode-note">
+                      Note: In production, only the controller can change the
+                      mode. This UI is for testing only.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div class="log">

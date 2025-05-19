@@ -6,6 +6,10 @@ import {
   WebRTCService,
 } from "../../services/webrtcService.ts";
 import { DEFAULT_SYNTH_PARAMS } from "../../lib/synth/index.ts";
+import {
+  ControllerMode,
+  KNOWN_CONTROLLER_MODES,
+} from "../../shared/controllerModes.ts";
 
 export function useClientManager(
   controllerId: Signal<string>,
@@ -107,6 +111,24 @@ export function useClientManager(
           }
           break;
         }
+        case "request_controller_mode":
+          // Client is requesting the current controller mode
+          addLog(
+            `[DEBUG_MODE_CHANGE] Client ${clientId} requested controller mode`,
+          );
+          if (webRTCServiceRef.current) {
+            // Send the current mode to the client - always default to DEFAULT mode
+            const modeToSend = KNOWN_CONTROLLER_MODES.DEFAULT;
+            webRTCServiceRef.current.sendMessageToClient(clientId, {
+              type: "controller_mode",
+              mode: modeToSend,
+            });
+            addLog(
+              `[DEBUG_MODE_CHANGE] Sent current mode (${modeToSend}) to client ${clientId}`,
+            );
+          }
+          break;
+
         default:
           addLog(
             `[ClientManager] Received unhandled message from ${clientId}: ${typedData.type}`,
@@ -118,6 +140,20 @@ export function useClientManager(
 
   const handleDataChannelOpen = useCallback((clientId: string) => {
     const client = clients.value.get(clientId);
+
+    // Send the mode as soon as the data channel opens - always set to DEFAULT mode
+    if (webRTCServiceRef.current) {
+      const modeToSend = KNOWN_CONTROLLER_MODES.DEFAULT;
+      webRTCServiceRef.current.sendMessageToClient(clientId, {
+        type: "controller_mode",
+        mode: modeToSend,
+      });
+      addLog(
+        `[DEBUG_MODE_CHANGE] Immediately sent mode=${modeToSend} to newly connected client ${clientId}`,
+      );
+    }
+
+    // Send initial synth parameters
     if (client && client.synthParams) {
       webRTCServiceRef.current?.sendMessageToClient(clientId, {
         type: "synth_params_full",
@@ -303,6 +339,37 @@ export function useClientManager(
     }
   }, [clients, addLog]);
 
+  // Broadcast a parameter change to all connected clients - for global parameters
+  const broadcastGlobalSynthParam = useCallback(
+    (paramId: string, value: unknown) => {
+      addLog(
+        `Broadcasting global param update: ${paramId} = ${value} to ${connectedClientsCount.value} clients.`,
+      );
+
+      // Create a payload for the parameter update
+      const payload = {
+        type: "synth_param", // Synth client listens for this type
+        param: paramId, // The ID of the global Default Mode parameter
+        value: value, // The new value (e.g., SIN string, enum value)
+      };
+
+      // Use the WebRTCService to broadcast to all connected clients
+      if (webRTCServiceRef.current) {
+        const results = webRTCServiceRef.current.broadcastMessage(payload);
+
+        let sentCount = 0;
+        for (const success of results.values()) {
+          if (success) sentCount++;
+        }
+
+        addLog(
+          `Global parameter ${paramId} broadcast to ${sentCount}/${results.size} clients`,
+        );
+      }
+    },
+    [connectedClientsCount, addLog],
+  );
+
   // Send a broadcast message to all connected clients
   const broadcastMessage = useCallback((message: string) => {
     if (message.trim() === "") {
@@ -392,6 +459,7 @@ export function useClientManager(
     connectToClient,
     disconnectFromClient,
     updateClientSynthParam,
+    broadcastGlobalSynthParam, // Added new method
     broadcastMessage,
     startPinging,
     stopPinging,
@@ -408,6 +476,7 @@ export function useClientManager(
     connectToClient,
     disconnectFromClient,
     updateClientSynthParam,
+    broadcastGlobalSynthParam, // Added to dependency array
     broadcastMessage,
     startPinging,
     stopPinging,

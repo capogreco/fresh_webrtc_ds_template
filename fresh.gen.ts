@@ -14,6 +14,7 @@ import * as $ctrl_dev from "./routes/ctrl/dev.tsx";
 import * as $ctrl_index from "./routes/ctrl/index.tsx";
 import * as $ctrl_logout from "./routes/ctrl/logout.tsx";
 import * as $index from "./routes/index.tsx";
+import * as $webrtc_default_mode_test from "./routes/webrtc/default-mode-test.tsx";
 import * as $Controller from "./islands/Controller.tsx";
 import * as $KickControllerButton from "./islands/KickControllerButton.tsx";
 import * as $Synth from "./islands/Synth.tsx";
@@ -38,6 +39,7 @@ const manifest = {
     "./routes/ctrl/index.tsx": $ctrl_index,
     "./routes/ctrl/logout.tsx": $ctrl_logout,
     "./routes/index.tsx": $index,
+    "./routes/webrtc/default-mode-test.tsx": $webrtc_default_mode_test,
   },
   islands: {
     "./islands/Controller.tsx": $Controller,

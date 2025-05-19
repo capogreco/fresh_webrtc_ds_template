@@ -5,6 +5,10 @@ import {
   type SynthParams,
 } from "../../services/AudioEngineService.ts";
 import { DEFAULT_SYNTH_PARAMS } from "../../lib/synth/index.ts";
+import {
+  ControllerMode,
+  KNOWN_CONTROLLER_MODES,
+} from "../../shared/controllerModes.ts";
 
 /**
  * Custom hook for managing the AudioEngineService with reactive signals
@@ -14,6 +18,7 @@ export type UseAudioEngineReturn = ReturnType<typeof useAudioEngine>;
 
 export function useAudioEngine(
   addLog: (message: string) => void = () => {},
+  currentControllerMode?: Signal<ControllerMode>,
 ) {
   // Create signals for audio parameters
   const frequency = useSignal(DEFAULT_SYNTH_PARAMS.frequency);
@@ -37,9 +42,13 @@ export function useAudioEngine(
   const audioContextState = useSignal<string | null>(null);
   const audioReady = useSignal(false);
 
-  // Pink noise state
-  const pinkNoiseActive = useSignal(false);
-  const pinkNoiseSetupDone = useSignal(false);
+  // Volume check state
+  const isVolumeCheckPending = useSignal(false);
+
+  // Controller mode state - default to standard DEFAULT mode if none provided
+  const activeControllerMode = useSignal<ControllerMode>(
+    KNOWN_CONTROLLER_MODES.DEFAULT,
+  );
 
   // FFT data for visualizations
   const fftData = useSignal<Uint8Array | null>(null);
@@ -64,8 +73,18 @@ export function useAudioEngine(
         console.log(`[AUDIO_ENGINE] ${message}`);
       };
 
-      // Create audio engine service
-      audioEngineRef.current = new AudioEngineService(logger);
+      // Create audio engine service with engine state change callback
+      audioEngineRef.current = new AudioEngineService(
+        logger,
+        (engineState) => {
+          if (engineState.isVolumeCheckPending !== undefined) {
+            isVolumeCheckPending.value = engineState.isVolumeCheckPending;
+            addLog(
+              `useAudioEngine: Volume check pending state updated to: ${engineState.isVolumeCheckPending}`,
+            );
+          }
+        },
+      );
 
       // Update signals from initial service state
       const params = audioEngineRef.current.getParams();
@@ -128,71 +147,16 @@ export function useAudioEngine(
     animationFrameRef.current = requestAnimationFrame(updateVisualizations);
   }, []);
 
-  // Start pink noise for volume check
-  const startPinkNoise = useCallback(async (gain: number = 0.2) => {
-    try {
-      if (audioEngineRef.current && audioReady.value) {
-        try {
-          await audioEngineRef.current.startPinkNoise(gain);
-          pinkNoiseActive.value = true;
-          addLog("Pink noise started for volume check");
-        } catch (error) {
-          // If pink noise fails, proceed directly to volume check done
-          addLog(
-            `Error starting pink noise: ${
-              error instanceof Error ? error.message : String(error)
-            } - proceeding directly to main audio`,
-          );
-          console.error("Error starting pink noise:", error);
-
-          // Skip pink noise and go directly to main audio
-          handleVolumeCheckDone();
-        }
-      }
-    } catch (error) {
-      addLog(
-        `Error in startPinkNoise: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      console.error("Error in startPinkNoise:", error);
-
-      // Try to enable audio directly
-      if (audioEngineRef.current) {
-        audioEngineRef.current.setPinkNoiseSetupDone(true);
-        audioEngineRef.current.setMuted(false);
-        isMuted.value = false;
-        pinkNoiseSetupDone.value = true;
-        addLog("Audio enabled directly (skipping volume check).");
-      }
-    }
-  }, []);
-
-  // Stop pink noise
-  const stopPinkNoise = useCallback(() => {
+  /**
+   * Confirm volume check is complete and transition to full generative mode
+   */
+  const confirmVolumeCheckComplete = useCallback(() => {
     if (audioEngineRef.current) {
-      audioEngineRef.current.stopPinkNoise();
-      pinkNoiseActive.value = false;
-      addLog("Pink noise stopped");
+      // This will work for both DEFAULT and IKEDA modes
+      audioEngineRef.current.confirmVolumeCheckComplete();
+      addLog(`useAudioEngine: User confirmed volume check for ${activeControllerMode.value} mode.`);
     }
-  }, []);
-
-  // Handle completing volume check
-  const handleVolumeCheckDone = useCallback(() => {
-    if (audioEngineRef.current) {
-      stopPinkNoise();
-      pinkNoiseSetupDone.value = true;
-      audioEngineRef.current.setPinkNoiseSetupDone(true);
-      audioEngineRef.current.setMuted(false);
-      isMuted.value = false;
-      addLog("Volume check done. Audio enabled.");
-
-      // Restore note if it was active
-      if (isNoteActive.value) {
-        playNote(frequency.value);
-      }
-    }
-  }, [frequency.value, isNoteActive.value]);
+  }, [activeControllerMode.value, addLog]);
 
   // Play a note
   const playNote = useCallback((noteFrequency: number) => {
@@ -232,61 +196,68 @@ export function useAudioEngine(
     }
   }, [isMuted.value]);
 
-  // Update a synth parameter
+  // Update a synth parameter - generalized to handle any parameter
   const updateSynthParam = useCallback(
-    (param: keyof SynthParams, value: any) => {
-      if (!audioEngineRef.current) return;
-
-      switch (param) {
-        case "frequency":
-          audioEngineRef.current.setFrequency(value);
-          frequency.value = value;
-          currentNote.value = audioEngineRef.current.getCurrentNote();
-          break;
-        case "waveform":
-          audioEngineRef.current.setWaveform(value);
-          waveform.value = value;
-          break;
-        case "volume":
-          audioEngineRef.current.setVolume(value);
-          volume.value = value;
-          break;
-        case "detune":
-          audioEngineRef.current.setDetune(value);
-          detune.value = value;
-          break;
-        case "attack":
-          audioEngineRef.current.setAttack(value);
-          attack.value = value;
-          break;
-        case "release":
-          audioEngineRef.current.setRelease(value);
-          release.value = value;
-          break;
-        case "filterCutoff":
-          audioEngineRef.current.setFilterCutoff(value);
-          filterCutoff.value = value;
-          break;
-        case "filterResonance":
-          audioEngineRef.current.setFilterResonance(value);
-          filterResonance.value = value;
-          break;
-        case "vibratoRate":
-          audioEngineRef.current.setVibratoRate(value);
-          vibratoRate.value = value;
-          break;
-        case "vibratoWidth":
-          audioEngineRef.current.setVibratoWidth(value);
-          vibratoWidth.value = value;
-          break;
-        case "portamentoTime":
-          audioEngineRef.current.setPortamentoTime(value);
-          portamentoTime.value = value;
-          break;
+    (paramId: string, value: any) => {
+      if (!audioEngineRef.current) {
+        addLog("Audio engine not initialized, cannot update param: " + paramId);
+        return;
       }
+
+      // Directly forward to AudioEngineService
+      audioEngineRef.current.updateParameter(paramId, value);
     },
-    [],
+    [addLog],
   );
+
+  // Watch for controller mode changes from parent component
+  useEffect(() => {
+    if (currentControllerMode) {
+      // Update our local signal when the parent's signal changes
+      const updateControllerMode = () => {
+        addLog(
+          `[DEBUG_MODE_CHANGE] useAudioEngine.useEffect[modeChanged]: currentControllerMode=${currentControllerMode.value}, activeControllerMode=${activeControllerMode.value}`,
+        );
+
+        if (currentControllerMode.value !== activeControllerMode.value) {
+          activeControllerMode.value = currentControllerMode.value;
+
+          // If audio engine is ready, set the mode in the service
+          if (audioEngineRef.current && audioContextReady.value) {
+            addLog(
+              `[DEBUG_MODE_CHANGE] useAudioEngine.useEffect[modeChanged]: Setting AudioEngineService mode to ${activeControllerMode.value}`,
+            );
+            audioEngineRef.current.setMode(activeControllerMode.value);
+          } else {
+            addLog(
+              `[DEBUG_MODE_CHANGE] useAudioEngine.useEffect[modeChanged]: Cannot set mode yet. audioEngineRef.current=${!!audioEngineRef
+                .current}, audioContextReady=${audioContextReady.value}`,
+            );
+          }
+        }
+      };
+
+      // Initialize with current value
+      updateControllerMode();
+
+      // Set up the effect dependency to track changes
+      const unsubscribe = currentControllerMode.subscribe(updateControllerMode);
+
+      return () => {
+        unsubscribe();
+      };
+    }
+  }, [currentControllerMode]);
+
+  // Set mode in AudioEngineService when it becomes ready
+  useEffect(() => {
+    if (audioEngineRef.current && audioContextReady.value) {
+      addLog(
+        `Setting initial audio engine mode: ${activeControllerMode.value}`,
+      );
+      audioEngineRef.current.setMode(activeControllerMode.value);
+    }
+  }, [audioContextReady.value]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -320,6 +291,39 @@ export function useAudioEngine(
     };
   }, []);
 
+  // Method to get current controller mode
+  const getControllerMode = useCallback(() => {
+    if (audioEngineRef.current) {
+      return audioEngineRef.current.getActiveMode() ||
+        activeControllerMode.value;
+    }
+    return activeControllerMode.value;
+  }, [activeControllerMode.value]);
+
+  // Method to set controller mode and initialize parameters
+  const setControllerMode = useCallback(
+    (mode: ControllerMode, initialParams?: Record<string, unknown>) => {
+      // Update our local signal
+      addLog(
+        `[DEBUG_MODE_CHANGE] useAudioEngine.setControllerMode: Setting mode to ${mode}, current mode: ${activeControllerMode.value}`,
+      );
+      activeControllerMode.value = mode;
+
+      // If audio engine exists, set the mode on the engine
+      if (audioEngineRef.current) {
+        addLog(
+          `[DEBUG_MODE_CHANGE] useAudioEngine.setControllerMode: Setting audio engine mode to ${mode}`,
+        );
+        audioEngineRef.current.setMode(mode, initialParams);
+      } else {
+        addLog(
+          `[DEBUG_MODE_CHANGE] useAudioEngine.setControllerMode: Audio engine not initialized, cannot set mode: ${mode}`,
+        );
+      }
+    },
+    [addLog, activeControllerMode.value],
+  );
+
   return {
     // Parameter signals
     frequency,
@@ -341,20 +345,20 @@ export function useAudioEngine(
     audioContextState,
     audioReady,
     audioContextReady,
-    pinkNoiseActive,
-    pinkNoiseSetupDone,
+    isVolumeCheckPending, // Added for integrated volume check
     fftData,
     waveformData,
+    activeControllerMode,
 
     // Methods
     initializeAudioContext,
-    startPinkNoise,
-    stopPinkNoise,
-    handleVolumeCheckDone,
+    confirmVolumeCheckComplete, // Use this instead of the old pink noise methods
     playNote,
     stopNote,
     playNoteByName,
     toggleMute,
     updateSynthParam,
+    getControllerMode,
+    setControllerMode,
   };
 }

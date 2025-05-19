@@ -1,0 +1,25 @@
+/**
+ * Default Mode module exports
+ */
+
+// Export types
+export * from "./types.ts";
+
+// Export SIN parser utilities
+export * from "./sin_parser.ts";
+
+// Export SIN resolver classes
+export * from "./sin_resolver.ts";
+
+// Export Euclidean rhythm generators
+export * from "./euclidean.ts";
+
+// Export default parameters
+export * from "./defaults.ts";
+
+// Export parameter utilities
+export * from "./param_utils.ts";
+
+// Export Default Mode engine
+// IKEDA MVP REBUILD: Using engine_COMPLEX_BACKUP instead of engine.ts to avoid recursion
+export { DefaultModeEngine } from "./engine_COMPLEX_BACKUP.ts";

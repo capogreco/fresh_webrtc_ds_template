@@ -15,6 +15,12 @@ import { LogDisplay } from "../components/controller/LogDisplay.tsx";
 import { BroadcastMessageForm } from "../components/controller/BroadcastMessageForm.tsx";
 import { AddClientForm } from "../components/controller/AddClientForm.tsx";
 import { ClientManagerProvider } from "../lib/contexts.ts";
+import {
+  ControllerMode,
+  KNOWN_CONTROLLER_MODES,
+} from "../shared/controllerModes.ts";
+import { MODE_PARAMS_MAP } from "../shared/modes/index.ts";
+import { SynthControls } from "../components/controller/SynthControls.tsx";
 
 interface ControllerProps {
   user: {
@@ -39,6 +45,24 @@ export default function Controller({ user, clientId }: ControllerProps) {
     ReturnType<typeof useClientManager> | null
   >(null);
 
+  // Current controller mode - set to IKEDA for MVP
+  const currentMode = useSignal<ControllerMode>(ControllerMode.IKEDA);
+
+  // Global state for Default Mode parameters
+  const globalDefaultModeParamsState = useSignal<Record<string, unknown>>({});
+
+  // Computed signal for parameters to pass to ClientList
+  const paramDescriptorsForClientList = computed(() => {
+    if (
+      currentMode.value !== KNOWN_CONTROLLER_MODES.DEFAULT &&
+      MODE_PARAMS_MAP[currentMode.value]
+    ) {
+      return MODE_PARAMS_MAP[currentMode.value];
+    }
+    // For Default Mode, ClientList won't show main controls
+    return [];
+  });
+
   // Add a log entry - memoized
   const addLog = useCallback((text: string) => {
     logs.value = [...logs.value, `${formatTime()}: ${text}`];
@@ -48,6 +72,41 @@ export default function Controller({ user, clientId }: ControllerProps) {
       if (logEl) logEl.scrollTop = logEl.scrollHeight;
     }, 0);
   }, [logs]); // logs signal reference is stable
+
+  // Method to broadcast current mode to all clients
+  const broadcastCurrentMode = useCallback(() => {
+    addLog(
+      `[DEBUG_MODE_BROADCAST] Broadcasting current mode (${currentMode.value}) to all clients`,
+    );
+    if (clientManagerInstanceRef.current) {
+      clientManagerInstanceRef.current.broadcastMessage({
+        type: "controller_mode",
+        mode: currentMode.value,
+      });
+    }
+  }, [currentMode.value, addLog]);
+
+  // Initialize global default mode parameters
+  useEffect(() => {
+    if (currentMode.value === KNOWN_CONTROLLER_MODES.DEFAULT) {
+      const initialDefaults: Record<string, unknown> = {};
+      const defaultParamsDescriptors =
+        MODE_PARAMS_MAP[KNOWN_CONTROLLER_MODES.DEFAULT] || [];
+
+      defaultParamsDescriptors.forEach((descriptor) => {
+        initialDefaults[descriptor.id] = descriptor.defaultValue;
+      });
+
+      globalDefaultModeParamsState.value = initialDefaults;
+      addLog("Initialized global Default Mode parameters state.");
+
+      // Broadcast current mode to all connected clients
+      broadcastCurrentMode();
+    } else {
+      // Optional: Clear state if mode is not Default
+      // globalDefaultModeParamsState.value = {};
+    }
+  }, [currentMode.value, broadcastCurrentMode, addLog]); // Re-run when currentMode changes
 
   // Internal logic for when controller is kicked - memoized
   const handleControllerKickedInternalLogic = useCallback(
@@ -175,9 +234,43 @@ export default function Controller({ user, clientId }: ControllerProps) {
     addLog(`Added client: ${newClientId}`);
   }, [addLog]); // Depends on methods from clientManagerInstanceRef.current and addLog
 
+  // In the future, this will be used to switch modes based on MIDI device or user selection
+  const handleModeChange = useCallback((newMode: ControllerMode) => {
+    addLog(`Changing controller mode to: ${newMode}`);
+    currentMode.value = newMode;
+
+    // Immediately broadcast the mode change to all connected clients
+    setTimeout(() => {
+      addLog(
+        `[DEBUG_MODE_BROADCAST] Delayed mode broadcast after change to ${newMode}`,
+      );
+      broadcastCurrentMode();
+    }, 100);
+  }, [addLog, currentMode, broadcastCurrentMode]);
+
+  // Handler for global Default Mode parameter changes
+  const handleGlobalDefaultModeParamChange = useCallback(
+    (paramId: string, newValue: unknown) => {
+      // 1. Update local state for immediate UI feedback
+      globalDefaultModeParamsState.value = {
+        ...globalDefaultModeParamsState.value,
+        [paramId]: newValue,
+      };
+      addLog(`Global Default Param Changed: ${paramId} = ${newValue}`);
+
+      // 2. Broadcast this change to ALL connected synth clients
+      clientManagerInstanceRef.current?.broadcastGlobalSynthParam(
+        paramId,
+        newValue,
+      );
+    },
+    [globalDefaultModeParamsState, addLog],
+  );
+
   // Effect to set up the controller on mount
   useEffect(() => {
     addLog("Controller initialized. Connecting to signaling server...");
+    addLog(`Using controller mode: ${currentMode.value}`);
 
     // Request wake lock to prevent screen from sleeping
     const activateWakeLock = async () => {
@@ -253,7 +346,30 @@ export default function Controller({ user, clientId }: ControllerProps) {
           <strong>Connected Clients:</strong>{" "}
           {clientManagerInstanceRef.current?.connectedClientsCount.value ?? 0}
         </div>
+        <div>
+          <strong>Mode:</strong> {currentMode.value}
+        </div>
       </div>
+
+      {/* Global Default Mode Controls - only shown when in DEFAULT mode */}
+      {currentMode.value === KNOWN_CONTROLLER_MODES.DEFAULT && (
+        <div
+          class="default-mode-global-controls section-box"
+          style="margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px;"
+        >
+          <h2>Default Mode Global Controls</h2>
+          <p class="section-description">
+            These controls affect all connected clients
+          </p>
+          <SynthControls
+            idPrefix="global_default"
+            params={globalDefaultModeParamsState.value}
+            paramDescriptors={MODE_PARAMS_MAP[KNOWN_CONTROLLER_MODES.DEFAULT] ||
+              []}
+            onParamChange={handleGlobalDefaultModeParamChange}
+          />
+        </div>
+      )}
 
       <ClientManagerProvider value={clientManagerInstanceRef.current}>
         <ClientList
@@ -265,6 +381,8 @@ export default function Controller({ user, clientId }: ControllerProps) {
             (() => {})}
           onSynthParamChange={clientManagerInstanceRef.current
             ?.updateClientSynthParam ?? (() => {})}
+          paramDescriptors={paramDescriptorsForClientList.value}
+          currentOperatingMode={currentMode.value}
         />
 
         <AddClientForm
