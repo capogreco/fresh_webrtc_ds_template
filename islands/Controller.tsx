@@ -66,7 +66,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
         const parsedMsg = JSON.parse(messageString);
         addLog(`[Controller] Msg from ${clientId} on [${channelLabel}]: type=${parsedMsg.type}`);
 
-        if (parsedMsg.type === "app_pong" && parsedMsg.original_timestamp !== undefined) {
+        if (parsedMsg.type === "app_pong" && parsedMsg.original_timestamp !== undefined && channelLabel === "reliable_control") {
           const originalSentTime = pingSentTimesRef.current.get(clientId);
           
           if (originalSentTime === parsedMsg.original_timestamp) {
@@ -96,6 +96,25 @@ export default function Controller({ user, clientId }: ControllerProps) {
             console.warn(`[Controller AppPing] Pong from ${clientId} for mismatched ping. Stored: ${originalSentTime}, Pong's: ${parsedMsg.original_timestamp}`);
           } else {
             // console.warn(`[Controller AppPing] Pong from ${clientId} but no ping registered (or already processed).`);
+          }
+        } else if (parsedMsg.type === "stream_ack_pulse" && parsedMsg.original_ping_ts !== undefined && channelLabel === "streaming_updates") {
+          // Handle stream_ack_pulse
+          addLog(`[Controller] Received stream_ack_pulse from ${clientId} for original_ping_ts: ${parsedMsg.original_ping_ts}`);
+          if (clientManagerInstanceRef.current && clientManagerInstanceRef.current.clients) {
+            const currentClientsMap = clientManagerInstanceRef.current.clients.value;
+            if (currentClientsMap.has(clientId)) {
+              const newClientsMap = new Map(currentClientsMap);
+              const clientToUpdate = newClientsMap.get(clientId)!;
+              
+              const updatedClient = {
+                ...clientToUpdate,
+                lastStreamingAckPulseSeen: Date.now(),
+                streamingChannelHealth: "active" as const,
+              };
+              newClientsMap.set(clientId, updatedClient);
+              clientManagerInstanceRef.current.clients.value = newClientsMap;
+              console.log(`[Controller StreamingHealth] Client ${clientId}: status set to 'active', lastSeen_ms_ago: ${Date.now() - updatedClient.lastStreamingAckPulseSeen}`);
+            }
           }
         } else if (parsedMsg.type === "audio_state") {
           addLog(
@@ -702,6 +721,69 @@ export default function Controller({ user, clientId }: ControllerProps) {
               // console.warn(`[Controller AppPing] Failed to send app_ping to ${clientId}`);
               pingSentTimesRef.current.delete(clientId); // Clean up if send failed immediately
             }
+            
+            // Check and update streaming channel health
+            // First, initialize streamingChannelHealth if not set
+            if (client.streamingChannelHealth === undefined) { // Initialize if not set
+              let healthNeedsInit = false;
+              let initialHealth: "unknown" | "active" | "stale" = "unknown"; // Default for truly new
+              
+              // If there's a recent pulse seen (e.g. from a very fast first message), mark active
+              if (client.lastStreamingAckPulseSeen && (Date.now() - client.lastStreamingAckPulseSeen < 7000) ) {
+                  initialHealth = "active";
+              }
+              // Check if current map version already has it from onMessageFromClient to avoid overwriting "active" with "unknown"
+              const currentClientInMap = clientManagerInstanceRef.current.clients.value.get(clientId);
+              if (!currentClientInMap?.streamingChannelHealth) { // only update if not already set by onMessage
+                healthNeedsInit = true;
+              }
+
+              if (healthNeedsInit) {
+                  console.log(`[Controller StreamingHealth] Client ${clientId}: initializing health to '${initialHealth}'`);
+                  const currentClientsMap = clientManagerInstanceRef.current.clients.value;
+                  const newClientsMap = new Map(currentClientsMap);
+                  const clientToUpdate = newClientsMap.get(clientId);
+                  if (clientToUpdate) {
+                      const updatedClientData = { ...clientToUpdate, streamingChannelHealth: initialHealth };
+                      newClientsMap.set(clientId, updatedClientData);
+                      clientManagerInstanceRef.current.clients.value = newClientsMap;
+                  }
+              }
+            }
+            
+            // Now check for staleness
+            let healthNeedsUpdate = false;
+            let newStreamingHealth = client.streamingChannelHealth;
+
+            if (client.lastStreamingAckPulseSeen) {
+              const timeSinceLastPulse = now - client.lastStreamingAckPulseSeen;
+              const staleThreshold = 7000; // e.g., a bit more than 2 ping intervals (3s*2 + 1s buffer)
+              if (timeSinceLastPulse > staleThreshold && client.streamingChannelHealth !== "stale") {
+                addLog(`[Controller] Streaming channel for ${clientId} marked STALE (no pulse for ${timeSinceLastPulse}ms).`);
+                newStreamingHealth = "stale";
+                healthNeedsUpdate = true;
+              } else if (timeSinceLastPulse <= staleThreshold && client.streamingChannelHealth === "stale") {
+                // It became active again if a pulse was received by onMessageFromClient
+                // This logic here is mainly for marking as stale. "active" is set by onMessageFromClient.
+              }
+            } else if (client.streamingChannelHealth !== "unknown") {
+              // No pulse ever seen, mark as unknown (or initially stale)
+              // This could be set when client is added too.
+              // newStreamingHealth = "unknown"; 
+              // healthNeedsUpdate = true;
+            }
+
+            if (healthNeedsUpdate) {
+              const currentClientsMap = clientManagerInstanceRef.current.clients.value;
+              const newClientsMap = new Map(currentClientsMap);
+              const clientToUpdate = newClientsMap.get(clientId); // Re-get to ensure it's the latest from the map
+              if (clientToUpdate) {
+                const updatedClientData = { ...clientToUpdate, streamingChannelHealth: newStreamingHealth };
+                newClientsMap.set(clientId, updatedClientData);
+                clientManagerInstanceRef.current.clients.value = newClientsMap;
+                console.log(`[Controller StreamingHealth] Client ${clientId}: status updated to '${newStreamingHealth}', lastSeen_ms_ago: ${clientToUpdate && clientToUpdate.lastStreamingAckPulseSeen ? Date.now() - clientToUpdate.lastStreamingAckPulseSeen : 'never'}`);
+              }
+            }
           }
         });
       }
@@ -750,6 +832,15 @@ export default function Controller({ user, clientId }: ControllerProps) {
 
       {/* TODO: UI for selecting, editing, and managing instrumentDefinitions will go here */}
       <div
+        class="controller-status section-box"
+        style="margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px;"
+      >
+        <h2>Controller Status</h2>
+        <p>Current Operating Mode: <strong>{MODE_PARAMS_MAP.active === "IKEDA" ? "IKEDA" : "DEFAULT"}</strong></p>
+        {/* Add additional global controls here */}
+      </div>
+
+      <div
         class="instrument-controls section-box"
         style="margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px;"
       >
@@ -771,6 +862,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
           onSynthParamChange={clientManagerInstanceRef.current
             ?.updateClientSynthParam ?? (() => {})}
           paramDescriptors={[]}
+          currentOperatingMode={KNOWN_CONTROLLER_MODES.IKEDA}
         />
 
         <AddClientForm

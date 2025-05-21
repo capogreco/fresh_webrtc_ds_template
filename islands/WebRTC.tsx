@@ -442,19 +442,37 @@ export default function WebRTC() {
               addLog(`Received app_ping with invalid timestamp: ${timestamp}`);
               return;
             }
+            
+            // 1. Send app_pong back on the SAME channel (usually reliable_control)
+            if (channel.readyState === "open") { // Check if the current channel is open
+              try {
+                const pongMessage = { type: "app_pong", original_timestamp: timestamp };
+                console.log(`[APP_PING_PONG] Sending app_pong response on [${channel.label}]:`, pongMessage);
+                channel.send(JSON.stringify(pongMessage));
+                addLog(`Responded to app_ping with app_pong (original_timestamp: ${timestamp}, channel: ${channel.label})`);
+              } catch (error) {
+                console.error(`Error sending app_pong response on [${channel.label}]:`, error);
+                addLog(`Failed to send app_pong on [${channel.label}]: ${error instanceof Error ? error.message : String(error)}`);
+              }
+            } else {
+              addLog(`[APP_PING_PONG] Cannot send app_pong, channel [${channel.label}] is not open.`);
+            }
 
-            // Send an immediate pong response with the original timestamp
-            try {
-              const pongMessage = {
-                type: "app_pong",
-                original_timestamp: timestamp
-              };
-              console.log(`[APP_PING_PONG] Sending app_pong response:`, pongMessage);
-              channel.send(JSON.stringify(pongMessage));
-              addLog(`Responded to app_ping with app_pong (original timestamp: ${timestamp}, channel: ${channel.label})`);
-            } catch (error) {
-              console.error(`Error sending app_pong response:`, error);
-              addLog(`Failed to send app_pong response: ${error instanceof Error ? error.message : String(error)}`);
+            // 2. Send stream_ack_pulse on streaming_updates channel
+            if (channel.label === "reliable_control") { // Only do this if ping came on reliable
+                if (streamingUpdatesChannel.value && streamingUpdatesChannel.value.readyState === "open") {
+                    try {
+                        const pulseMsg = { type: "stream_ack_pulse", original_ping_ts: timestamp };
+                        console.log(`[AppPing] Sending stream_ack_pulse on [${streamingUpdatesChannel.value.label}] for original_ping_ts ${timestamp}:`, pulseMsg);
+                        streamingUpdatesChannel.value.send(JSON.stringify(pulseMsg));
+                        addLog(`Sent stream_ack_pulse for original_ping_ts ${timestamp}`);
+                    } catch (error) {
+                        console.error(`Error sending stream_ack_pulse on [${streamingUpdatesChannel.value.label}]:`, error);
+                        addLog(`Failed to send stream_ack_pulse: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                } else {
+                    addLog(`[AppPing] streaming_updates channel not open or available, cannot send stream_ack_pulse.`);
+                }
             }
             return;
           }

@@ -103,14 +103,18 @@ export function ClientList(props: ClientListProps) {
                       : "Latency: N/A"}
                   </div>
                 )}
-                <div class="client-operating-mode">
-                  Mode: {currentMode} 
-                  {currentMode === ControllerMode.DEFAULT && client.connected && client.synthParams && (
-                    <span>
-                      {" "}(Status: {client.synthParams.oscillatorEnabled ? "Active" : "Standby"})
-                    </span>
-                  )}
-                </div>
+                {/* Display client-specific status IF in DEFAULT mode */}
+                {currentMode === ControllerMode.DEFAULT && client.connected && client.synthParams && (
+                  <div class="client-default-mode-status">
+                    Status: {client.synthParams.oscillatorEnabled ? "Active" : "Standby"}
+                  </div>
+                )}
+                {/* Display streaming channel health */}
+                {client.streamingChannelHealth && (
+                  <div class={`client-streaming-health ${client.streamingChannelHealth}`}>
+                    Streaming: {client.streamingChannelHealth.charAt(0).toUpperCase() + client.streamingChannelHealth.slice(1)}
+                  </div>
+                )}
               </div>
               <div class="client-actions">
                 {!client.connected
