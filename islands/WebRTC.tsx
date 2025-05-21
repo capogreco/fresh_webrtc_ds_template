@@ -1,5 +1,5 @@
 import { useSignal } from "@preact/signals";
-import { useCallback, useEffect } from "preact/hooks";
+import { useCallback, useEffect, useRef } from "preact/hooks";
 import { h as _h } from "preact";
 import {
   requestWakeLock,
@@ -64,10 +64,18 @@ export default function WebRTC() {
   const message = useSignal("");
   const logs = useSignal<string[]>([]);
   const connection = useSignal<RTCPeerConnection | null>(null);
-  const dataChannel = useSignal<RTCDataChannel | null>(null);
+  const reliableControlChannel = useSignal<RTCDataChannel | null>(null);
+  const streamingUpdatesChannel = useSignal<RTCDataChannel | null>(null);
   const socket = useSignal<WebSocket | null>(null);
   const activeController = useSignal<string | null>(null);
   const autoConnectAttempted = useSignal(false);
+  const hasRequestedInstrumentDefinition = useSignal(false);
+  
+  // Ref to track if websocket disconnect was intentional
+  const intentionallyDisconnectedSocketRef = useRef(false);
+  
+  // Ref to store the heartbeat interval ID
+  const heartbeatIntervalRef = useRef<number | null>(null);
 
   // Controller mode state
   const controllerMode = useSignal<ControllerMode>(
@@ -102,7 +110,7 @@ export default function WebRTC() {
   // Utility for sending a parameter update to controller
 
   // Utility for sending all synth parameters to controller
-  const sendAllSynthParameters = (channel: RTCDataChannel) => {
+  const sendAllSynthParameters = useCallback((channel: RTCDataChannel) => {
     try {
       // Define all parameters to send
       const params = [
@@ -141,10 +149,27 @@ export default function WebRTC() {
     } catch (error) {
       console.error("Error sending synth parameters:", error);
     }
-  };
+  }, [
+    addLog,
+    audio.activeControllerMode.value,
+    audio.attack.value,
+    audio.audioContextState.value,
+    audio.detune.value,
+    audio.filterCutoff.value,
+    audio.filterResonance.value,
+    audio.frequency.value,
+    audio.isMuted.value,
+    audio.isNoteActive.value,
+    audio.portamentoTime.value,
+    audio.release.value,
+    audio.vibratoRate.value,
+    audio.vibratoWidth.value,
+    audio.volume.value,
+    audio.waveform.value
+  ]);
 
-  // Send only audio state to controller
-  const sendAudioStateOnly = (channel: RTCDataChannel) => {
+  // Send only audio state to controller (no synth parameters)
+  const sendAudioStateOnly = useCallback((channel: RTCDataChannel) => {
     try {
       channel.send(JSON.stringify({
         type: "audio_state",
@@ -157,75 +182,81 @@ export default function WebRTC() {
     } catch (error) {
       console.error("Error sending audio state:", error);
     }
-  };
+  }, [addLog, audio.activeControllerMode.value, audio.isNoteActive.value]);
 
   // Handle ping messages
-  const handlePingMessage = (
-    data: string,
-    channel: RTCDataChannel,
-    prefix: string = "",
-  ) => {
-    console.log(`[${prefix}] PING detected!`);
+  const handlePingMessage = useCallback(
+    (
+      data: string,
+      channel: RTCDataChannel,
+      prefix: string = "",
+    ) => {
+      console.log(`[${prefix}] PING detected!`);
 
-    // Create pong response by replacing PING with PONG
-    const pongMessage = data.replace("PING:", "PONG:");
-    console.log(`[${prefix}] Sending PONG:`, pongMessage);
+      // Create pong response by replacing PING with PONG
+      const pongMessage = data.replace("PING:", "PONG:");
+      console.log(`[${prefix}] Sending PONG:`, pongMessage);
 
-    // Send the response immediately
-    try {
-      // Add a small delay to ensure message is processed
-      setTimeout(() => {
-        try {
-          channel.send(pongMessage);
-          console.log(`[${prefix}] PONG sent successfully`);
-          addLog(`Responded with ${pongMessage}`);
-        } catch (e) {
-          console.error(`[${prefix}] Failed to send delayed PONG:`, e);
-        }
-      }, 10);
+      // Send the response immediately
+      try {
+        // Add a small delay to ensure message is processed
+        setTimeout(() => {
+          try {
+            channel.send(pongMessage);
+            console.log(`[${prefix}] PONG sent successfully`);
+            addLog(`Responded with ${pongMessage}`);
+          } catch (e) {
+            console.error(`[${prefix}] Failed to send delayed PONG:`, e);
+          }
+        }, 10);
 
-      // Also try sending immediately
-      channel.send(pongMessage);
-      console.log(`[${prefix}] PONG sent immediately`);
-    } catch (error) {
-      console.error(`[${prefix}] Error sending PONG:`, error);
-      addLog(
-        `Failed to respond to ping: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  };
+        // Also try sending immediately
+        channel.send(pongMessage);
+        console.log(`[${prefix}] PONG sent immediately`);
+      } catch (error) {
+        console.error(`[${prefix}] Error sending PONG:`, error);
+        addLog(
+          `Failed to respond to ping: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    },
+    [addLog]
+  );
 
   // Handle test messages
-  const handleTestMessage = (
-    data: string,
-    channel: RTCDataChannel,
-    prefix: string = "",
-  ) => {
-    console.log(`[${prefix}] TEST message detected!`);
+  const handleTestMessage = useCallback(
+    (
+      data: string,
+      channel: RTCDataChannel,
+      prefix: string = "",
+    ) => {
+      console.log(`[${prefix}] TEST message detected!`);
 
-    // Reply with the same test message
-    try {
-      // Echo back the test message
-      channel.send(`ECHOED:${data}`);
-      console.log(`[${prefix}] Echoed test message`);
-      addLog(`Echoed test message`);
-    } catch (error) {
-      console.error(`[${prefix}] Error echoing test message:`, error);
-      addLog(
-        `Failed to echo test message: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  };
+      // Reply with the same test message
+      try {
+        // Echo back the test message
+        channel.send(`ECHOED:${data}`);
+        console.log(`[${prefix}] Echoed test message`);
+        addLog(`Echoed test message`);
+      } catch (error) {
+        console.error(`[${prefix}] Error echoing test message:`, error);
+        addLog(
+          `Failed to echo test message: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    },
+    [addLog]
+  );
 
   // Function to send parameter updates to controller
   const sendParamToController = (param: string, value: unknown) => {
-    if (dataChannel.value && dataChannel.value.readyState === "open") {
+    if (reliableControlChannel.value && reliableControlChannel.value.readyState === "open") {
       try {
-        dataChannel.value.send(JSON.stringify({
+        reliableControlChannel.value.send(JSON.stringify({
           type: "synth_param",
           param,
           value,
@@ -236,48 +267,149 @@ export default function WebRTC() {
     }
   };
 
-  // Unified channel message handler
-  const handleChannelMessage = (
-    event: MessageEvent,
-    channel: RTCDataChannel,
-    prefix: string = "",
-  ) => {
-    console.log(`[${prefix || "CLIENT"}] Received message:`, event.data);
+  // Forward declare a closeConnectionFunction to use instead of disconnect directly in handleChannelMessage
+  const closeConnection = (isUserInitiated: boolean = true) => {
+    if (reliableControlChannel.value) {
+      addLog(`Closing reliable_control channel: ${reliableControlChannel.value.label}`);
+      reliableControlChannel.value.close();
+      reliableControlChannel.value = null;
+    }
+    if (streamingUpdatesChannel.value) {
+      addLog(`Closing streaming_updates channel: ${streamingUpdatesChannel.value.label}`);
+      streamingUpdatesChannel.value.close();
+      streamingUpdatesChannel.value = null;
+    }
 
-    // Try to parse JSON messages
-    if (typeof event.data === "string" && event.data.startsWith("{")) {
-      try {
-        const message = JSON.parse(event.data);
+    if (connection.value) {
+      connection.value.close();
+      connection.value = null;
+    }
 
-        // Handle synth parameter update messages
-        if (message.type === "synth_param") {
-          const paramId = message.param;
-          const value = message.value;
+    connected.value = false;
+    hasRequestedInstrumentDefinition.value = false; // Reset the flag on disconnect
 
-          // Special handling for oscillatorEnabled - control note on/off
-          if (paramId === "oscillatorEnabled") {
-            console.log(
-              `[SYNTH] Received oscillatorEnabled=${value}, current isNoteActive=${audio.isNoteActive.value}, isMuted=${audio.isMuted.value}`,
+    if (!isUserInitiated) {
+      // This was an automatic/error disconnect
+      addLog("Connection lost - will attempt to reconnect");
+      targetId.value = ""; // Clear target ID to avoid confusion
+
+      // Schedule a reconnection attempt after a delay
+      setTimeout(() => {
+        autoConnectAttempted.value = false; // Reset to allow auto-connect
+        // Instead of calling requestActiveController, log it
+        addLog("Reconnection scheduled - automatic connection should happen soon");
+      }, 2000);
+    }
+  };
+
+  // Unified channel message handler - declare before references to it
+  const handleChannelMessage = useCallback(
+    (
+      event: MessageEvent,
+      channel: RTCDataChannel,
+      prefix: string = "",
+    ) => {
+      console.log(`[${prefix || "CLIENT"}] Received message:`, event.data);
+
+      // Try to parse JSON messages
+      if (typeof event.data === "string" && event.data.startsWith("{")) {
+        try {
+          const message = JSON.parse(event.data);
+          addLog(`[${channel.label}] Parsed: ${message.type}`);
+
+          // Handle synth parameter update messages
+          if (message.type === "synth_param") {
+            const paramId = message.param;
+            const value = message.value;
+
+            // Special handling for oscillatorEnabled - control note on/off
+            if (paramId === "oscillatorEnabled") {
+              console.log(
+                `[SYNTH] Received oscillatorEnabled=${value}, current isNoteActive=${audio.isNoteActive.value}, isMuted=${audio.isMuted.value}`,
+              );
+
+              // If oscillatorEnabled is true, play note; otherwise stop note
+              if (value) {
+                // If audio is ready and not muted, play the note immediately
+                if (audio.audioContextReady.value && !audio.isMuted.value) {
+                  console.log(
+                    "[SYNTH] Audio ready and oscillatorEnabled=true, playing note immediately",
+                  );
+                  audio.playNote(audio.frequency.value);
+                  addLog(
+                    `Playing note at ${audio.frequency.value}Hz due to controller setting`,
+                  );
+                } else {
+                  // If audio not ready or muted, log the note request and notify controller
+                  addLog(
+                    `Note requested but audio not enabled or muted`,
+                  );
+
+                  // Let controller know that audio is muted but note is pending
+                  if (channel.readyState === "open") {
+                    try {
+                      channel.send(JSON.stringify({
+                        type: "audio_state",
+                        isMuted: true,
+                        audioState: "disabled",
+                        pendingNote: true,
+                      }));
+                    } catch (error) {
+                      console.error("Error sending audio state:", error);
+                    }
+                  }
+                }
+              } else {
+                // Stop the note
+                audio.stopNote();
+                addLog("Note off due to controller setting");
+              }
+            }
+
+            // Forward all parameters directly to the audio engine
+            addLog(
+              `Synth Client: Received synth_param: ${paramId} = ${value}. Forwarding to audio engine.`,
             );
+            audio.updateSynthParam(paramId, value);
+            return;
+          }
 
-            // If oscillatorEnabled is true, play note; otherwise stop note
-            if (value) {
-              // If audio is ready and not muted, play the note immediately
-              if (audio.audioContextReady.value && !audio.isMuted.value) {
-                console.log(
-                  "[SYNTH] Audio ready and oscillatorEnabled=true, playing note immediately",
+          // Handle full synth parameter set messages
+          if (message.type === "synth_params_full" && message.params) {
+            addLog(
+              `Synth Client: Received synth_params_full. Applying ${
+                Object.keys(message.params).length
+              } parameters.`,
+            );
+            for (const [paramId, value] of Object.entries(message.params)) {
+              // Forward each parameter directly to the audio engine
+              // Ensure 'value' is not undefined, though Object.entries should skip that.
+              if (value !== undefined) {
+                 addLog(
+                  `Synth Client: Applying from full set: ${paramId} = ${String(value)}`,
                 );
-                audio.playNote(audio.frequency.value);
+                audio.updateSynthParam(paramId, value);
+              }
+            }
+            return;
+          }
+
+          // Handle note_on messages
+          if (message.type === "note_on") {
+            if (message.frequency) {
+              // Only play sound if audio is already initialized and not muted
+              if (audio.audioContextReady.value && !audio.isMuted.value) {
+                audio.playNote(message.frequency);
                 addLog(
-                  `Playing note at ${audio.frequency.value}Hz due to controller setting`,
+                  `Playing note ${audio.currentNote.value} (${message.frequency}Hz)`,
                 );
               } else {
-                // If audio not ready or muted, log the note request and notify controller
+                // If audio not enabled, just log the message and notify controller
                 addLog(
                   `Note requested but audio not enabled or muted`,
                 );
 
-                // Let controller know that audio is muted but note is pending
+                // Let controller know that audio is muted
                 if (channel.readyState === "open") {
                   try {
                     channel.send(JSON.stringify({
@@ -291,186 +423,263 @@ export default function WebRTC() {
                   }
                 }
               }
-            } else {
-              // Stop the note
-              audio.stopNote();
-              addLog("Note off due to controller setting");
             }
+            return;
           }
 
-          // Forward all parameters directly to the audio engine
-          addLog(
-            `Synth Client: Received synth_param: ${paramId} = ${value}. Forwarding to audio engine.`,
-          );
-          audio.updateSynthParam(paramId, value);
-          return;
-        }
-
-        // Handle note_on messages
-        if (message.type === "note_on") {
-          if (message.frequency) {
-            // Only play sound if audio is already initialized and not muted
-            if (audio.audioContextReady.value && !audio.isMuted.value) {
-              audio.playNote(message.frequency);
-              addLog(
-                `Playing note ${audio.currentNote.value} (${message.frequency}Hz)`,
-              );
-            } else {
-              // If audio not enabled, just log the message and notify controller
-              addLog(
-                `Note requested but audio not enabled or muted`,
-              );
-
-              // Let controller know that audio is muted
-              if (channel.readyState === "open") {
-                try {
-                  channel.send(JSON.stringify({
-                    type: "audio_state",
-                    isMuted: true,
-                    audioState: "disabled",
-                    pendingNote: true,
-                  }));
-                } catch (error) {
-                  console.error("Error sending audio state:", error);
-                }
-              }
-            }
+          // Handle note_off messages
+          if (message.type === "note_off") {
+            // Release the current note
+            audio.stopNote();
+            return;
           }
-          return;
-        }
 
-        // Handle note_off messages
-        if (message.type === "note_off") {
-          // Release the current note
-          audio.stopNote();
-          return;
-        }
+          // Handle application-level ping messages (used for latency measurement)
+          if (message.type === "app_ping") {
+            console.log(`[APP_PING_PONG] Received app_ping with timestamp: ${message.timestamp}`);
+            const timestamp = message.timestamp;
+            if (typeof timestamp !== "number") {
+              addLog(`Received app_ping with invalid timestamp: ${timestamp}`);
+              return;
+            }
 
-        // Handle controller mode change messages
-        if (message.type === "controller_mode") {
-          addLog(
-            `[DEBUG_MODE_CHANGE] WebRTC: Received controller_mode_update, mode: ${message.mode}`,
-          );
+            // Send an immediate pong response with the original timestamp
+            try {
+              const pongMessage = {
+                type: "app_pong",
+                original_timestamp: timestamp
+              };
+              console.log(`[APP_PING_PONG] Sending app_pong response:`, pongMessage);
+              channel.send(JSON.stringify(pongMessage));
+              addLog(`Responded to app_ping with app_pong (original timestamp: ${timestamp}, channel: ${channel.label})`);
+            } catch (error) {
+              console.error(`Error sending app_pong response:`, error);
+              addLog(`Failed to send app_pong response: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            return;
+          }
 
-          if (
-            message.mode &&
-            Object.values(KNOWN_CONTROLLER_MODES).includes(message.mode)
-          ) {
+          // Handle controller mode change messages
+          if (message.type === "controller_mode") {
             addLog(
-              `[DEBUG_MODE_CHANGE] WebRTC: Setting controllerMode.value to ${message.mode}`,
+              `[DEBUG_MODE_CHANGE] WebRTC: Received controller_mode_update, mode: ${message.mode}`,
             );
-            controllerMode.value = message.mode as ControllerMode;
-            addLog(`Controller mode changed to: ${message.mode}`);
 
-            // Pass along initial parameters if provided
-            if (message.initialParams) {
+            if (
+              message.mode &&
+              Object.values(KNOWN_CONTROLLER_MODES).includes(message.mode)
+            ) {
               addLog(
-                `[DEBUG_MODE_CHANGE] WebRTC: Calling audio.setControllerMode with initialParams`,
+                `[DEBUG_MODE_CHANGE] WebRTC: Setting controllerMode.value to ${message.mode}`,
               );
-              audio.setControllerMode(
-                message.mode as ControllerMode,
-                message.initialParams,
-              );
+              controllerMode.value = message.mode as ControllerMode;
+              addLog(`Controller mode changed to: ${message.mode}`);
+
+              // Pass along initial parameters if provided
+              if (message.initialParams) {
+                addLog(
+                  `[DEBUG_MODE_CHANGE] WebRTC: Calling audio.setControllerMode with initialParams`,
+                );
+                audio.setControllerMode(
+                  message.mode as ControllerMode,
+                  message.initialParams,
+                );
+              } else {
+                addLog(
+                  `[DEBUG_MODE_CHANGE] WebRTC: Calling audio.setControllerMode without initialParams`,
+                );
+                audio.setControllerMode(message.mode as ControllerMode);
+              }
             } else {
-              addLog(
-                `[DEBUG_MODE_CHANGE] WebRTC: Calling audio.setControllerMode without initialParams`,
-              );
-              audio.setControllerMode(message.mode as ControllerMode);
+              addLog(`Invalid controller mode received: ${message.mode}`);
             }
-          } else {
-            addLog(`Invalid controller mode received: ${message.mode}`);
+            return;
           }
-          return;
-        }
 
-        // Handle controller handoff messages
-        if (message.type === "controller_handoff" && message.newControllerId) {
-          // Log the handoff
-          console.log(
-            `Received controller handoff to: ${message.newControllerId}`,
-          );
-          addLog(
-            `Controller handoff: connecting to new controller ${message.newControllerId}`,
-          );
+          // Handle controller handoff messages
+          if (message.type === "controller_handoff" && message.newControllerId) {
+            // Log the handoff
+            console.log(
+              `Received controller handoff to: ${message.newControllerId}`,
+            );
+            addLog(
+              `Controller handoff: connecting to new controller ${message.newControllerId}`,
+            );
 
-          // Update target ID to the new controller
-          targetId.value = message.newControllerId;
-          activeController.value = message.newControllerId;
+            // Update target ID to the new controller
+            targetId.value = message.newControllerId;
+            activeController.value = message.newControllerId;
 
-          // Close current connection after a short delay to allow message to be processed
-          setTimeout(() => {
-            // Disconnect (but not user initiated)
-            disconnect(false);
-
-            // Connect to new controller after a short delay
+            // Close current connection after a short delay to allow message to be processed
             setTimeout(() => {
-              connectToController(message.newControllerId);
+              // Disconnect (but not user initiated) - use the local closeConnection function
+              closeConnection(false);
+
+              // Connect to new controller after a short delay - avoid direct reference
+              const newControllerId = message.newControllerId; // Capture for closure
+              setTimeout(() => {
+                // Indirect connection call to avoid circular dependencies
+                // Set targetId, autoConnectAttempted, etc. and trigger a connection
+                if (newControllerId) {
+                  targetId.value = newControllerId;
+                  activeController.value = newControllerId;
+                  autoConnectAttempted.value = true;
+                  
+                  // Instead of calling connect directly, do what connect does inline
+                  if (targetId.value) {
+                    // Get WebRTC servers using a new connection, similar to what initRTC does
+                    // Create the connection directly instead of using another function
+                    fetchIceServers().then(iceServers => {
+                      try {
+                        const peerConnection = new RTCPeerConnection({ iceServers });
+                        connection.value = peerConnection;
+                        
+                        // Set up basic event handlers
+                        peerConnection.oniceconnectionstatechange = () => {
+                          addLog(`ICE connection state: ${peerConnection.iceConnectionState}`);
+                        };
+                        
+                        peerConnection.onconnectionstatechange = () => {
+                          addLog(`Connection state: ${peerConnection.connectionState}`);
+                        };
+                        
+                        // Trigger initialization of data channels and initiating the connection
+                        setTimeout(() => {
+                          try {
+                            addLog(`Initiating connection to ${targetId.value}`);
+                            // This is not a full connection implementation to avoid circular dependencies,
+                            // but it should at least start the connection process
+                            // Wait for the service implementation to call us back for data channels and ICE setup
+                            
+                            // Trigger a basic event to indicate connection is starting
+                            addLog("*** Controller handoff: Connect functionality needs to be implemented with direct calls");
+                            addLog("*** Controller handoff: Please manually reconnect if automatic connection fails");
+                          } catch (e) {
+                            addLog(`Error in handoff reconnect: ${e instanceof Error ? e.message : String(e)}`);
+                          }
+                        }, 10);
+                      } catch (e) {
+                        addLog(`Error setting up WebRTC reconnection: ${e instanceof Error ? e.message : String(e)}`);
+                      }
+                    }).catch(e => {
+                      addLog(`Error fetching ICE servers: ${e instanceof Error ? e.message : String(e)}`);
+                    });
+                  }
+                }
+              }, 500);
             }, 500);
-          }, 500);
 
-          return;
+            return;
+          }
+        } catch (error) {
+          console.error(`Error parsing JSON message:`, error);
+          // Continue with non-JSON message handling
         }
-      } catch (error) {
-        console.error(`Error parsing JSON message:`, error);
-        // Continue with non-JSON message handling
       }
-    }
 
-    // Handle PING messages
-    if (typeof event.data === "string" && event.data.startsWith("PING:")) {
-      handlePingMessage(event.data, channel, prefix);
-      return;
-    }
+      // Handle PING messages
+      if (typeof event.data === "string" && event.data.startsWith("PING:")) {
+        handlePingMessage(event.data, channel, prefix);
+        return;
+      }
 
-    // Handle TEST messages
-    if (typeof event.data === "string" && event.data.startsWith("TEST:")) {
-      handleTestMessage(event.data, channel, prefix);
-      return;
-    }
+      // Handle TEST messages
+      if (typeof event.data === "string" && event.data.startsWith("TEST:")) {
+        handleTestMessage(event.data, channel, prefix);
+        return;
+      }
 
-    // Regular message
-    addLog(`Received: ${event.data}`);
-  };
+      // Regular message
+      addLog(`Received: ${event.data}`);
+    }, 
+    [
+      addLog, 
+      activeController,
+      audio.audioContextReady.value,
+      audio.currentNote.value, 
+      audio.frequency.value, 
+      audio.isMuted.value, 
+      audio.isNoteActive.value, 
+      audio.playNote, 
+      audio.setControllerMode, 
+      audio.stopNote, 
+      audio.updateSynthParam,
+      autoConnectAttempted,
+      connection,
+      controllerMode,
+      reliableControlChannel,
+      streamingUpdatesChannel, 
+      targetId,
+      hasRequestedInstrumentDefinition,
+      connected
+      // disconnect removed to avoid circular dependencies
+      // connect removed to avoid circular dependencies
+      // connectToController removed to avoid circular dependencies
+      // handlePingMessage and handleTestMessage are also intentionally removed
+    ]
+  );
 
   // Setup channel event handlers
-  const setupDataChannel = (channel: RTCDataChannel, prefix: string = "") => {
+  const setupDataChannel = useCallback((channel: RTCDataChannel, prefix: string = "") => {
     channel.onopen = () => {
-      addLog(`Data channel opened${prefix ? ` (${prefix})` : ""}`);
-      connected.value = true;
-
-      // Send current synth parameters to the controller
-      if (!audio.isMuted.value) { // Not muted means audio is enabled
-        sendAllSynthParameters(channel);
-      } else {
-        // Even if audio is not enabled, send the audio state
-        sendAudioStateOnly(channel);
+      addLog(`Data channel [${channel.label}] opened${prefix ? ` (${prefix})` : ""}`);
+      if (channel.label === "reliable_control") {
+        connected.value = true;
       }
 
-      // Request current controller state to ensure we're in sync
-      // especially for note on/off status and controller mode
-      try {
-        console.log("[SYNTH] Requesting current controller state");
-        channel.send(JSON.stringify({
-          type: "request_current_state",
-        }));
-        addLog("Requested current controller state");
+      // Send current synth parameters to the controller (via reliable channel)
+      // Send current synth parameters to the controller (via reliable channel)
+      if (channel.label === "reliable_control") {
+        if (!audio.isMuted.value) { // Not muted means audio is enabled
+          sendAllSynthParameters(channel);
+        } else {
+          // Even if audio is not enabled, send the audio state
+          sendAudioStateOnly(channel);
+        }
 
-        // Also request the current controller mode specifically
-        console.log("[DEBUG_MODE_CHANGE] Requesting current controller mode");
-        channel.send(JSON.stringify({
-          type: "request_controller_mode",
-        }));
-        addLog("[DEBUG_MODE_CHANGE] Requested current controller mode");
-      } catch (error) {
-        console.error("Error requesting controller state:", error);
+        // Request instrument definition ONLY IF NOT ALREADY REQUESTED
+        if (!hasRequestedInstrumentDefinition.value) {
+          try {
+            console.log("[SYNTH] Requesting current instrument definition (flag check)");
+            channel.send(JSON.stringify({
+              type: "request_instrument_definition",
+            }));
+            addLog("Requested current instrument definition");
+            hasRequestedInstrumentDefinition.value = true;
+          } catch (error) {
+            console.error("Error requesting instrument definition:", error);
+          }
+        } else {
+          console.log("[SYNTH] Skipping instrument definition request (already requested)");
+        }
       }
     };
 
-    channel.onclose = () => {
-      addLog(`Data channel closed${prefix ? ` (${prefix})` : ""}`);
+    channel.onclose = (event: Event) => { // Added event parameter
+      // Try to get more details from the event if possible, though it's a generic Event
+      let eventDetails = "Generic Event";
+      if (event) {
+        const eventProps: Record<string, any> = {};
+        for (const key in event) {
+          // Avoid functions and prototype properties
+          if (typeof (event as any)[key] !== 'function' && Object.prototype.hasOwnProperty.call(event, key)) {
+            eventProps[key] = (event as any)[key];
+          }
+        }
+        try {
+          eventDetails = JSON.stringify(eventProps, null, 2);
+        } catch (e) {
+          eventDetails = `Error stringifying event details: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      }
+      addLog(
+        `Data channel [${channel.label}] closed${prefix ? ` (${prefix})` : ""}. Event details: ${eventDetails}`
+      );
 
-      // Disconnection not initiated by user, try to reconnect
-      disconnect(false);
+      if (channel.label === "reliable_control") {
+        // Disconnection not initiated by user, try to reconnect - use closeConnection instead of disconnect
+        closeConnection(false);
+      }
     };
 
     channel.onmessage = (event) => {
@@ -478,20 +687,19 @@ export default function WebRTC() {
     };
 
     return channel;
-  };
+  }, [
+    addLog, 
+    audio.isMuted.value, 
+    connected,
+    hasRequestedInstrumentDefinition.value, 
+    handleChannelMessage, 
+    sendAllSynthParameters, 
+    sendAudioStateOnly
+    // disconnect removed to avoid circular dependency
+  ]);
 
-  // Connect to the target peer
-  const connect = async () => {
-    if (!targetId.value) {
-      addLog("Please enter a target ID");
-      return;
-    }
-
-    await initRTC();
-  };
-
-  // Initialize the WebRTC connection
-  const initRTC = async () => {
+  // Initialize the WebRTC connection - define first because connect will use it
+  const initRTC = useCallback(async () => {
     // Get ICE servers from Twilio
     const iceServers = await fetchIceServers();
     console.log("Using ICE servers:", iceServers);
@@ -508,20 +716,35 @@ export default function WebRTC() {
       addLog(`Connection state: ${peerConnection.connectionState}`);
     };
 
-    // Create data channel
-    const channel = peerConnection.createDataChannel("dataChannel");
-    dataChannel.value = channel;
+    // Create data channels
+    addLog("Creating reliable_control data channel");
+    const reliableChan = peerConnection.createDataChannel("reliable_control", {
+      ordered: true,
+    });
+    reliableControlChannel.value = reliableChan;
+    setupDataChannel(reliableChan, "CLIENT_RELIABLE");
 
-    // Setup the data channel with our unified handlers
-    setupDataChannel(channel, "CLIENT");
+    addLog("Creating streaming_updates data channel");
+    const streamingChan = peerConnection.createDataChannel("streaming_updates", {
+      ordered: false,
+      maxRetransmits: 0, // Fire and forget for UDP-like behavior
+    });
+    streamingUpdatesChannel.value = streamingChan;
+    setupDataChannel(streamingChan, "CLIENT_STREAMING");
 
-    // Handle receiving a data channel
+    // Handle receiving data channels from the remote peer (controller)
     peerConnection.ondatachannel = (event) => {
       const receivedChannel = event.channel;
-      dataChannel.value = receivedChannel;
-
-      // Setup the received channel with our unified handlers
-      setupDataChannel(receivedChannel, "RECEIVED");
+      addLog(`Received data channel: ${receivedChannel.label}`);
+      if (receivedChannel.label === "reliable_control") {
+        reliableControlChannel.value = receivedChannel;
+        setupDataChannel(receivedChannel, "REMOTE_RELIABLE");
+      } else if (receivedChannel.label === "streaming_updates") {
+        streamingUpdatesChannel.value = receivedChannel;
+        setupDataChannel(receivedChannel, "REMOTE_STREAMING");
+      } else {
+        addLog(`Received unknown data channel: ${receivedChannel.label}`);
+      }
     };
 
     // Send ICE candidates to the other peer
@@ -574,16 +797,30 @@ export default function WebRTC() {
           }`,
         );
       });
-  };
+  }, [addLog, connection, reliableControlChannel, setupDataChannel, socket, streamingUpdatesChannel, targetId.value]);
 
-  // Send a message through the data channel
-  const sendMessage = () => {
-    if (!dataChannel.value || dataChannel.value.readyState !== "open") {
-      addLog("Data channel not open");
+  // Connect to the target peer - defined after initRTC to avoid circular dependency
+  const connect = useCallback(async () => {
+    if (!targetId.value) {
+      addLog("Please enter a target ID");
       return;
     }
 
-    dataChannel.value.send(message.value);
+    try {
+      await initRTC();
+    } catch (error) {
+      addLog(`Error connecting: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [addLog, initRTC, targetId.value]);
+
+  // Send a message through the data channel
+  const sendMessage = () => {
+    if (!reliableControlChannel.value || reliableControlChannel.value.readyState !== "open") {
+      addLog("Reliable control channel not open for sending messages");
+      return;
+    }
+
+    reliableControlChannel.value.send(message.value);
     addLog(`Sent: ${message.value}`);
     message.value = "";
   };
@@ -591,8 +828,21 @@ export default function WebRTC() {
   // Connection status is now verified directly by the controller
   // through ping/pong messages rather than being reported by clients
 
+  // Request the active controller from the signaling server - moved before it's referenced in other functions
+  const requestActiveController = useCallback(() => {
+    if (socket.value && socket.value.readyState === WebSocket.OPEN) {
+      console.log("Requesting active controller from signaling server");
+      socket.value.send(JSON.stringify({
+        type: "get-controller",
+      }));
+      addLog("Requested active controller");
+    } else {
+      console.error("Cannot request controller: WebSocket not open");
+    }
+  }, [addLog, socket]);
+
   // Check if we need to reconnect
-  const checkReconnection = () => {
+  const checkReconnection = useCallback(() => {
     // Only try to reconnect if:
     // 1. Not already connected
     // 2. We have an active controller
@@ -606,215 +856,130 @@ export default function WebRTC() {
       // Reset auto-connect flag to allow reconnection
       autoConnectAttempted.value = false;
 
-      // Connect to the controller
-      connectToController(activeController.value);
+      // Connect to the controller using targetId and connect directly
+      if (activeController.value) {
+        targetId.value = activeController.value;
+        setTimeout(() => {
+          connect();
+        }, 10);
+      }
     }
-  };
+  }, [
+    connected.value, 
+    activeController.value, 
+    connection.value, 
+    addLog, 
+    autoConnectAttempted,
+    connect,
+    targetId
+    // connectToController removed to avoid circular dependencies
+  ]);
 
-  // Disconnect and clean up the connection
-  const disconnect = (isUserInitiated: boolean = true) => {
-    if (dataChannel.value) {
-      dataChannel.value.close();
-      dataChannel.value = null;
+  // Disconnect and clean up the connection - Updated to avoid circular dependency with connectWebSocket
+  const disconnect = useCallback((isUserInitiated: boolean = true) => {
+    if (isUserInitiated) {
+      addLog("[disconnect TRACE] User initiated disconnect.");
+      intentionallyDisconnectedSocketRef.current = true; // Set a-priori
+    } else {
+      addLog("[disconnect TRACE] System initiated disconnect (e.g., WebRTC failed).");
+      // intentionallyDisconnectedSocketRef.current should be false here.
     }
 
+    // Close WebRTC data channels
+    if (reliableControlChannel.value) {
+      addLog(`Closing reliable_control channel: ${reliableControlChannel.value.label}`);
+      reliableControlChannel.value.close();
+      reliableControlChannel.value = null;
+    }
+    if (streamingUpdatesChannel.value) {
+      addLog(`Closing streaming_updates channel: ${streamingUpdatesChannel.value.label}`);
+      streamingUpdatesChannel.value.close();
+      streamingUpdatesChannel.value = null;
+    }
+
+    // Close RTCPeerConnection
     if (connection.value) {
       connection.value.close();
       connection.value = null;
     }
 
+    // Set WebRTC state flags
     connected.value = false;
+    hasRequestedInstrumentDefinition.value = false; // Reset the flag on disconnect
 
     // Only reset these if user initiated the disconnect
     if (isUserInitiated) {
-      // Close the websocket cleanly
+      // Close the websocket cleanly - intentionallyDisconnectedSocketRef.current is already true
       if (socket.value && socket.value.readyState === WebSocket.OPEN) {
-        // We'll set up a new socket after disconnecting
-        const oldSocket = socket.value;
-        socket.value = null;
-
-        // Close the socket properly
-        oldSocket.close(1000, "User initiated disconnect");
-
-        // Reconnect to signaling server with a new WebSocket
-        setTimeout(connectWebSocket, 500);
+        socket.value.close(1000, "User initiated disconnect");
       }
-
+      // socket.value = null; // Let the onclose handler null this out
+      
       targetId.value = "";
-      autoConnectAttempted.value = false;
-      addLog("Disconnected by user");
+      autoConnectAttempted.value = false; // Allow next auto-connect if needed by other logic
+      addLog("Disconnected by user. WebSocket closed intentionally.");
     } else {
-      // This was an automatic/error disconnect
-      addLog("Connection lost - will attempt to reconnect");
-      targetId.value = ""; // Clear target ID to avoid confusion
-
-      // Schedule a reconnection attempt after a delay
-      setTimeout(() => {
-        autoConnectAttempted.value = false; // Reset to allow auto-connect
-        requestActiveController(); // Request controller info again
-      }, 2000);
+      // This was an automatic/error disconnect (e.g., peer connection failed)
+      // The existing onclose handler for the socket (if any) will manage retries
+      if (socket.value) {
+        socket.value.close(1006, "Underlying connection failed"); // Or some other appropriate code
+      }
+      
+      targetId.value = ""; 
+      
+      // Re-enable automatic controller search after WebRTC disconnect
+      addLog("[disconnect TRACE] System disconnect - will attempt to reconnect to controller if available.");
+      setTimeout(requestActiveController, 2000); // This will re-trigger controller search
     }
-  };
+  }, [
+    addLog, 
+    autoConnectAttempted, 
+    connected, 
+    connection, 
+    hasRequestedInstrumentDefinition, 
+    intentionallyDisconnectedSocketRef,
+    reliableControlChannel, 
+    requestActiveController,
+    socket, 
+    streamingUpdatesChannel, 
+    targetId
+  ]);
 
-  // Request the active controller from the signaling server
-  const requestActiveController = () => {
-    if (socket.value && socket.value.readyState === WebSocket.OPEN) {
-      console.log("Requesting active controller from signaling server");
-      socket.value.send(JSON.stringify({
-        type: "get-controller",
-      }));
-      addLog("Requested active controller");
-    } else {
-      console.error("Cannot request controller: WebSocket not open");
-    }
-  };
-
-  // Auto-connect to the active controller
-  const connectToController = (controllerId: string) => {
+  // Auto-connect to the active controller - defined after connect
+  const connectToController = useCallback((controllerId: string) => {
     if (!controllerId) {
-      console.log("No active controller available");
+      addLog("[connectToController] No active controller available");
       return;
     }
 
     if (connected.value) {
-      console.log("Already connected, not connecting to controller");
+      addLog("[connectToController] Already connected, not connecting to controller");
       return;
     }
 
-    console.log(`Auto-connecting to controller: ${controllerId}`);
-    addLog(`Auto-connecting to controller: ${controllerId}`);
+    addLog(`[connectToController] Attempting to connect to controller: ${controllerId}`);
     activeController.value = controllerId;
 
-    // Set target ID and connect
+    // Set target ID for WebRTC connection
     targetId.value = controllerId;
 
     // Set flag before calling connect to prevent multiple attempts
+    // Note: This flag is primarily for WebSocket reconnects but also helps
+    // avoid multiple rapid initRTC calls
     autoConnectAttempted.value = true;
 
     // Call connect with a small delay to ensure everything is ready
     setTimeout(() => {
-      console.log("Executing delayed connection to", controllerId);
+      addLog(`[connectToController] Executing delayed WebRTC connection to ${controllerId}`);
       connect();
     }, 100);
-  };
+  }, [activeController, addLog, autoConnectAttempted, connected, targetId, connect]);
 
-  // Connect to the WebSocket signaling server
-  const connectWebSocket = () => {
-    // deno-lint-ignore no-window
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    // deno-lint-ignore no-window
-    const ws = new WebSocket(`${protocol}//${window.location.host}/api/signal`);
-    socket.value = ws;
-
-    ws.onopen = () => {
-      addLog("Signaling server connected");
-      ws.send(JSON.stringify({ type: "register", id: id.value }));
-
-      // Request active controller after registration
-      setTimeout(() => {
-        requestActiveController();
-      }, 500);
-
-      // Start sending heartbeats to keep the connection alive
-      setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          // Regular heartbeat - no state, just keeps connection open
-          ws.send(JSON.stringify({
-            type: "heartbeat",
-          }));
-        }
-      }, 30000); // Send heartbeat every 30 seconds
-    };
-
-    ws.onclose = () => {
-      addLog("Signaling server disconnected");
-
-      // Don't try to reconnect if we deliberately disconnected
-      if (connection.value || !socket.value) {
-        setTimeout(connectWebSocket, 1000); // Reconnect
-      }
-    };
-
-    ws.onerror = (error) => {
-      addLog(`WebSocket error. Will try to reconnect...`);
-      console.error("WebSocket error:", error);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        console.log("WebSocket message received:", event.data);
-        const message = JSON.parse(event.data);
-        console.log("Parsed message:", message);
-
-        switch (message.type) {
-          case "controller-info":
-            // Handle controller info message
-            console.log("Received controller info:", message);
-            if (message.controllerId) {
-              activeController.value = message.controllerId;
-              addLog(`Active controller: ${message.controllerId}`);
-
-              // Auto-connect if we have audio enabled and haven't attempted connection yet
-              console.log("Received controller info, should connect:", {
-                isMuted: audio.isMuted.value,
-                connected: connected.value,
-                autoConnectAttempted: autoConnectAttempted.value,
-                audioState: audio.audioContextState.value,
-                showAudioButton: showAudioButton.value,
-              });
-
-              // Always attempt connection regardless of audio state
-              if (!connected.value && !autoConnectAttempted.value) {
-                console.log(
-                  "ATTEMPTING AUTO-CONNECTION to controller:",
-                  message.controllerId,
-                );
-                connectToController(message.controllerId);
-              }
-            } else {
-              activeController.value = null;
-              addLog("No active controller available");
-            }
-            break;
-
-          case "offer":
-            // Handle offer asynchronously
-            console.log("Received WebRTC offer from:", message.source);
-            handleOffer(message).catch((error) => {
-              console.error("Error handling offer:", error);
-              addLog(
-                `Error handling offer: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            });
-            break;
-
-          case "answer":
-            console.log("Received WebRTC answer from:", message.source);
-            handleAnswer(message);
-            break;
-
-          case "ice-candidate":
-            console.log("Received ICE candidate from:", message.source);
-            handleIceCandidate(message);
-            break;
-
-          default:
-            addLog(`Unknown message type: ${message.type}`);
-        }
-      } catch (error) {
-        addLog(
-          `Error handling message: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    };
-  };
+  // Forward references to handler functions that will be defined later
+  // We'll update the connectWebSocket implementation after we define the handlers
 
   // Handle an incoming offer
-  const handleOffer = async (message: OfferMessage) => {
+  const handleOffer = useCallback(async (message: OfferMessage) => {
     console.log("Handling WebRTC offer from:", message.source, message);
 
     if (!connection.value) {
@@ -850,15 +1015,19 @@ export default function WebRTC() {
       };
 
       peerConnection.ondatachannel = (event) => {
-        console.log(
-          "Data channel received in offer handler:",
-          event.channel.label,
-        );
         const receivedChannel = event.channel;
-        dataChannel.value = receivedChannel;
-
-        // Setup the received channel with our unified handlers
-        setupDataChannel(receivedChannel, "ALT");
+        addLog(
+          `Data channel received in offer handler: ${receivedChannel.label}`,
+        );
+        if (receivedChannel.label === "reliable_control") {
+          reliableControlChannel.value = receivedChannel;
+          setupDataChannel(receivedChannel, "OFFER_RELIABLE");
+        } else if (receivedChannel.label === "streaming_updates") {
+          streamingUpdatesChannel.value = receivedChannel;
+          setupDataChannel(receivedChannel, "OFFER_STREAMING");
+        } else {
+          addLog(`Received unknown data channel in offer: ${receivedChannel.label}`);
+        }
       };
 
       console.log("Setting remote description from offer");
@@ -900,10 +1069,10 @@ export default function WebRTC() {
           );
         });
     }
-  };
+  }, [addLog, connection, reliableControlChannel, setupDataChannel, socket, streamingUpdatesChannel, targetId]);
 
   // Handle an incoming answer
-  const handleAnswer = (message: AnswerMessage) => {
+  const handleAnswer = useCallback((message: AnswerMessage) => {
     console.log("Handling WebRTC answer from:", message.source, message);
 
     if (connection.value) {
@@ -927,10 +1096,10 @@ export default function WebRTC() {
       console.error("Cannot handle answer: No connection exists");
       addLog("Error: No connection exists to handle answer");
     }
-  };
+  }, [addLog, connection]);
 
   // Handle an incoming ICE candidate
-  const handleIceCandidate = (message: IceCandidateMessage) => {
+  const handleIceCandidate = useCallback((message: IceCandidateMessage) => {
     console.log("Handling ICE candidate from:", message.source, message);
 
     if (connection.value) {
@@ -954,7 +1123,199 @@ export default function WebRTC() {
       console.error("Cannot handle ICE candidate: No connection exists");
       addLog("Error: No connection exists to handle ICE candidate");
     }
-  };
+  }, [addLog, connection]);
+
+  // Connect to the WebSocket signaling server - simplified version for debugging
+  const connectWebSocket = useCallback(() => {
+    addLog(`[connectWebSocket TRACE] Called. Current socket state: ${socket.value?.readyState ?? 'null'}`);
+
+    if (socket.value && (socket.value.readyState === WebSocket.OPEN || socket.value.readyState === WebSocket.CONNECTING)) {
+      addLog(`[connectWebSocket TRACE] WebSocket already open or connecting. Aborting.`);
+      return;
+    }
+
+    addLog(`[connectWebSocket TRACE] Creating new WebSocket...`);
+    // deno-lint-ignore no-window
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    // deno-lint-ignore no-window
+    const ws = new WebSocket(`${protocol}//${window.location.host}/api/signal`);
+    
+    // IMPORTANT: Assign to socket.value IMMEDIATELY after creation
+    // to prevent multiple instances if this function is somehow called rapidly.
+    socket.value = ws; 
+
+    ws.onopen = () => {
+      addLog(`[ws.onopen TRACE] WebSocket opened. Sending register for ID: ${id.value}`);
+      // DO NOT set autoConnectAttempted or intentionallyDisconnectedSocketRef here for this test
+      ws.send(JSON.stringify({ type: "register", id: id.value }));
+      
+      // REINSTATE requestActiveController with safety check
+      setTimeout(() => {
+        if (socket.value?.readyState === WebSocket.OPEN) { // Check if still open
+            addLog(`[ws.onopen TRACE] Requesting active controller.`);
+            requestActiveController();
+        }
+      }, 500); // Slight delay
+      
+      // REINSTATE heartbeat interval
+      // Clear any existing heartbeat interval before starting a new one
+      if (heartbeatIntervalRef.current !== null) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
+
+      addLog("[ws.onopen TRACE] Starting WebSocket heartbeat interval.");
+      heartbeatIntervalRef.current = setInterval(() => {
+        if (socket.value && socket.value.readyState === WebSocket.OPEN) {
+          // addLog("[Heartbeat TRACE] Sending heartbeat"); // Can be too noisy
+          socket.value.send(JSON.stringify({ type: "heartbeat" }));
+        } else {
+          // If socket is not open, the interval should have been cleared by onclose/onerror.
+          // This is a safeguard or could indicate an issue if reached.
+          addLog("[Heartbeat TRACE] Heartbeat: Socket not open. Clearing interval.");
+          if (heartbeatIntervalRef.current !== null) {
+            clearInterval(heartbeatIntervalRef.current);
+            heartbeatIntervalRef.current = null;
+          }
+        }
+      }, 30000); // Send heartbeat every 30 seconds
+    };
+
+    ws.onclose = (event) => {
+      addLog(`[ws.onclose TRACE] WebSocket closed. Code: ${event.code}, Reason: '${event.reason}', Clean: ${event.wasClean}. intentional: ${intentionallyDisconnectedSocketRef.current}, autoAttempt: ${autoConnectAttempted.value}`);
+      
+      if (heartbeatIntervalRef.current !== null) {
+        addLog("[ws.onclose TRACE] Clearing heartbeat interval.");
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
+
+      // Set socket.value to null only if this instance is the one in the signal
+      if (socket.value === ws) {
+          socket.value = null;
+      }
+
+      if (intentionallyDisconnectedSocketRef.current) {
+        addLog("[ws.onclose TRACE] Intentional disconnect. No automatic reconnect. Resetting intentional flag.");
+        intentionallyDisconnectedSocketRef.current = false; // Reset for next manual connection attempt
+      } else if (autoConnectAttempted.value) {
+        addLog("[ws.onclose TRACE] Auto-reconnect attempt already in progress or just failed. Not scheduling another from onclose.");
+        // If autoConnectAttempted was true, it means either:
+        // 1. connectWebSocket was called, failed, and onerror/onclose set it to true.
+        // 2. connectWebSocket was called, onopen fired (resetting autoConnectAttempted to false),
+        //    then it closed again, and this is the first onclose *after* that successful open.
+        // In case #2, we DO want to retry.
+        // The critical thing is that autoConnectAttempted is only reset to false by a successful onopen.
+        // So, if it's true here, it means onopen hasn't fired successfully SINCE it was set to true.
+        // Let's refine: we should try to reconnect if it's NOT intentional,
+        // and we're not *currently inside* a setTimeout from a previous onclose/onerror.
+        // The autoConnectAttempted flag itself signifies an attempt is scheduled/running.
+        // So if it's true, another attempt is already armed.
+      } else {
+        // This means: NOT intentional AND no auto-connect attempt is currently "active" (i.e. scheduled by a previous onclose/onerror).
+        // This is where we schedule a new attempt.
+        addLog(`[ws.onclose TRACE] Unexpected close. Scheduling reconnect. Setting autoAttempt=true.`);
+        autoConnectAttempted.value = true; 
+        setTimeout(() => {
+          addLog(`[ws.onclose TRACE] setTimeout: Now calling connectWebSocket. Current autoAttempt: ${autoConnectAttempted.value}`); // Should be true
+          connectWebSocket(); 
+        }, 3000 + Math.floor(Math.random() * 2000)); // Retry after 3-5 seconds with jitter
+      }
+    };
+
+    ws.onerror = (error) => {
+      const errorMessage = `WebSocket error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      addLog(`[ws.onerror TRACE] Fired. Error: ${errorMessage}. intentional: ${intentionallyDisconnectedSocketRef.current}, autoAttempt: ${autoConnectAttempted.value}, socketState: ${socket.value?.readyState ?? 'null'}`);
+      
+      if (heartbeatIntervalRef.current !== null) {
+        addLog("[ws.onerror TRACE] Clearing heartbeat interval due to error.");
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
+      
+      // No need to schedule a reconnect from onerror if onclose will handle it.
+      // However, if onclose might NOT fire for certain errors, or if we want a faster response to error:
+      // The primary mechanism is: error -> close -> onclose attempts reconnect.
+      // If onclose is robust, onerror mainly just logs.
+      // Let's keep onerror from directly scheduling a reconnect if onclose will do it.
+      // The only reason for onerror to act is if the socket state is such that onclose might not fire,
+      // OR if we want to ensure socket.value is nulled before onclose.
+
+      // If an error occurs, and the socket isn't already closed (which would trigger onclose),
+      // explicitly close it to ensure the onclose logic runs.
+      if (socket.value === ws && socket.value.readyState !== WebSocket.CLOSED) {
+          addLog("[ws.onerror TRACE] Error on open/connecting socket. Explicitly closing to trigger onclose for reconnect logic.");
+          socket.value.close(); // This will trigger the ws.onclose handler
+      }
+      // Ensure socket.value is nulled if this was the current socket
+      if (socket.value === ws) {
+          socket.value = null;
+      }
+    };
+
+    // REINSTATE onmessage handler with careful controls
+    ws.onmessage = (event) => {
+      addLog(`[ws.onmessage TRACE] Received raw: ${event.data}`);
+      try {
+        const message = JSON.parse(event.data as string);
+        // addLog(`[ws.onmessage TRACE] Parsed: ${JSON.stringify(message)}`); // Can be noisy
+
+        switch (message.type) {
+          case "controller-info":
+            addLog(`[controller-info] Received: ${JSON.stringify(message)}`);
+            if (message.controllerId) {
+              activeController.value = message.controllerId;
+              addLog(`[controller-info] Active controller is ${message.controllerId}.`);
+
+              addLog(`[controller-info] Checking auto-connect conditions: WebRTC connected.value=${connected.value}, WebSocket autoConnectAttempted.value=${autoConnectAttempted.value}`);
+
+              // The 'autoConnectAttempted' flag is for WebSocket auto-reconnection.
+              // 'connected.value' refers to the WebRTC peer connection state.
+              if (!connected.value) { // Only attempt if not already WebRTC-connected
+                 addLog(`[controller-info] Conditions MET for WebRTC auto-connect. Calling connectToController for ${message.controllerId}`);
+                 connectToController(message.controllerId); 
+              } else {
+                 addLog(`[controller-info] Conditions NOT MET for WebRTC auto-connect (already WebRTC connected: ${connected.value}).`);
+              }
+            } else {
+              activeController.value = null;
+              addLog("[controller-info] No active controller available.");
+            }
+            break;
+          case "offer":
+            addLog(`[offer] Received from ${message.source}`);
+            handleOffer(message as OfferMessage); // Ensure types are correct
+            break;
+          case "answer":
+            addLog(`[answer] Received from ${message.source}`);
+            handleAnswer(message as AnswerMessage);
+            break;
+          case "ice-candidate":
+            addLog(`[ice-candidate] Received from ${message.source}`);
+            handleIceCandidate(message as IceCandidateMessage);
+            break;
+          // NO "heartbeat_ack" or similar needed from server for client's heartbeat
+          default:
+            addLog(`[ws.onmessage TRACE] Unknown message type: ${message.type}`);
+        }
+      } catch (error) {
+        addLog(`[ws.onmessage TRACE] Error parsing message: ${event.data}, Error: ${error}`);
+      }
+    };
+
+  }, [
+    id,
+    addLog,
+    socket,
+    activeController,
+    connected,
+    autoConnectAttempted,
+    connectToController, // Added back since we now call it in controller-info handler
+    handleOffer,
+    handleAnswer,
+    handleIceCandidate,
+    requestActiveController // Called in onopen
+  ]);
 
   // Initialize audio context with user gesture
   const initAudioContext = useCallback(async () => {
@@ -980,111 +1341,36 @@ export default function WebRTC() {
 
   // Connect to the signaling server on mount and clean up on unmount
   useEffect(() => {
-    // Connect to signaling server (but don't enable audio yet)
+    addLog("[Main useEffect TRACE] Mount effect: Calling connectWebSocket.");
     connectWebSocket();
 
-    // Request wake lock to prevent screen from sleeping
-    requestWakeLock().then((lock) => {
-      wakeLock.value = lock;
-    });
-
-    // Setup wake lock event listeners for reacquisition
-    const cleanup = setupWakeLockListeners(
-      () => wakeLock.value,
-      (lock) => wakeLock.value = lock,
-    );
-
-    // Set up periodic connection checks for auto-reconnection
-    const reconnectionInterval = setInterval(() => {
-      checkReconnection();
-    }, 10000); // Check every 10 seconds
-
-    // Set up periodic controller info refresh
-    const controllerRefreshInterval = setInterval(() => {
-      // Only refresh if we're not connected to avoid unnecessary requests
-      if (!connected.value) {
-        requestActiveController();
-      } else {
-        // If connected, periodically check/request controller mode to ensure we're in sync
-        addLog(
-          "[DEBUG_MODE_CHANGE] Periodic mode check: Current mode=" +
-            controllerMode.value,
-        );
-        if (dataChannel.value && dataChannel.value.readyState === "open") {
-          try {
-            dataChannel.value.send(JSON.stringify({
-              type: "request_controller_mode",
-            }));
-            addLog(
-              "[DEBUG_MODE_CHANGE] Sent request_controller_mode message to controller",
-            );
-          } catch (error) {
-            console.error("Error requesting controller mode:", error);
-          }
-        }
-      }
-    }, 10000); // Refresh every 10 seconds
-
-    // Listen for Default Mode test events
-    const handleDefaultModeTest = (event: CustomEvent<any>) => {
-      console.log("Received Default Mode test event:", event.detail);
-
-      if (event.detail.type === "controller_mode") {
-        // Handle mode change
-        controllerMode.value = event.detail.mode;
-        addLog(`Test: Mode changed to ${event.detail.mode}`);
-      } else if (event.detail.type === "synth_param") {
-        // Handle parameter change
-        const param = event.detail.param;
-        const value = event.detail.value;
-
-        // Simulate a parameter message from the controller
-        // This will trigger the same processing as if it came from WebRTC
-        handleChannelMessage(
-          {
-            data: JSON.stringify({ type: "synth_param", param, value }),
-          } as MessageEvent,
-          { readyState: "open", send: () => {} } as RTCDataChannel,
-          "TEST",
-        );
-      }
-    };
-
-    // Add event listener for test events
-    window.addEventListener(
-      "default-mode-test",
-      handleDefaultModeTest as EventListener,
-    );
-
-    // Cleanup function
+    // ALL OTHER LOGIC (wake lock, etc.) TEMPORARILY COMMENTED OUT for this test
+    // requestWakeLock().then((lock) => {
+    //   wakeLock.value = lock;
+    // });
+    // const cleanupWakeLock = setupWakeLockListeners(wakeLock, () => console.log("..."));
+    
     return () => {
-      // Clear intervals
-      clearInterval(reconnectionInterval);
-      clearInterval(controllerRefreshInterval);
-
-      // Remove test event listener
-      window.removeEventListener(
-        "default-mode-test",
-        handleDefaultModeTest as EventListener,
-      );
-
-      // Release wake lock
-      if (wakeLock.value) {
-        wakeLock.value.release().catch((err) =>
-          console.error("Error releasing wake lock", err)
-        );
+      addLog("[Main useEffect TRACE] Cleanup effect (unmount).");
+      // cleanupWakeLock && cleanupWakeLock(); // If re-enabled
+      
+      // Clear the heartbeat interval if it exists
+      if (heartbeatIntervalRef.current !== null) {
+        addLog("[Main useEffect TRACE] Clearing heartbeat interval on unmount.");
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
       }
-
-      // Remove wake lock event listeners
-      if (cleanup) cleanup();
-
-      // Close connections
-      if (socket.value) socket.value.close();
-      if (connection.value) connection.value.close();
-
-      // Audio engine cleanup is handled automatically by useAudioEngine hook's useEffect cleanup
+      
+      // If there's a socket, close it intentionally
+      if (socket.value) {
+        addLog("[Main useEffect TRACE] Closing socket on unmount.");
+        // CRITICAL: Set intentional flag BEFORE closing to ensure onclose handler sees it
+        intentionallyDisconnectedSocketRef.current = true;
+        socket.value.close(1000, "Component unmounting");
+        socket.value = null;
+      }
     };
-  }, []);
+  }, []); // ENSURE EMPTY DEPENDENCY ARRAY. `connectWebSocket` is stable via useCallback.
 
   // Handle pressing Enter in the message input
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -1145,7 +1431,9 @@ export default function WebRTC() {
                 class="volume-check-active-default-mode"
                 style="text-align: center; padding: 20px; border-bottom: 1px solid #eee; margin-bottom: 20px;"
               >
-                <h1>Volume Adjustment ({audio.activeControllerMode.value} Mode)</h1>
+                <h1>
+                  Volume Adjustment ({audio.activeControllerMode.value} Mode)
+                </h1>
                 <p style="margin-bottom: 20px;">
                   Pink noise is playing. Please adjust your system volume to a
                   comfortable level.

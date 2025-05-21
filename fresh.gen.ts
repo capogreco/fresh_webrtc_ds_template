@@ -19,6 +19,7 @@ import * as $Controller from "./islands/Controller.tsx";
 import * as $KickControllerButton from "./islands/KickControllerButton.tsx";
 import * as $Synth from "./islands/Synth.tsx";
 import * as $WebRTC from "./islands/WebRTC.tsx";
+import * as $hooks_clientManagerStore from "./islands/hooks/clientManagerStore.ts";
 import * as $hooks_useAudioEngine from "./islands/hooks/useAudioEngine.ts";
 import * as $hooks_useClientManager from "./islands/hooks/useClientManager.ts";
 import * as $hooks_useWebRTCConnection from "./islands/hooks/useWebRTCConnection.ts";
@@ -46,6 +47,7 @@ const manifest = {
     "./islands/KickControllerButton.tsx": $KickControllerButton,
     "./islands/Synth.tsx": $Synth,
     "./islands/WebRTC.tsx": $WebRTC,
+    "./islands/hooks/clientManagerStore.ts": $hooks_clientManagerStore,
     "./islands/hooks/useAudioEngine.ts": $hooks_useAudioEngine,
     "./islands/hooks/useClientManager.ts": $hooks_useClientManager,
     "./islands/hooks/useWebRTCConnection.ts": $hooks_useWebRTCConnection,

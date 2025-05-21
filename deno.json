@@ -6,7 +6,7 @@
     "manifest": "deno task cli manifest $(pwd)",
     "start": "deno run -A --watch=static/,routes/ --unstable-kv --env dev.ts",
     "build": "deno run -A --unstable-kv --env dev.ts build",
-    "preview": "deno run -A main.ts",
+    "preview": "deno run -A --unstable-kv main.ts",
     "update": "deno run -A -r https://fresh.deno.dev/update ."
   },
   "lint": {

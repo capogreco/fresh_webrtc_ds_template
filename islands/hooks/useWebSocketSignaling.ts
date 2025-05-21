@@ -20,7 +20,7 @@ export interface WebSocketMessage {
 export interface UseWebSocketSignalingProps {
   localId?: Signal<string>; // The ID to register with the signaling server (new name)
   controllerId?: Signal<string>; // Legacy support for old parameter name
-  addLog: (logText: string) => void; // Callback to log messages in the parent component
+  // addLog: (logText: string) => void; // REMOVED - Replaced with console.log/warn/error
   onSignalingMessage?: (message: SignalingMessage) => void; // General handler for all WebRTC signaling messages
   onOfferReceived?: (
     message: { source: string; data: RTCSessionDescriptionInit; type: "offer" },
@@ -55,7 +55,7 @@ export interface UseWebSocketSignalingReturn {
 export function useWebSocketSignaling({
   localId,
   controllerId,
-  addLog,
+  // addLog, // REMOVED - Replaced with console.log/warn/error
   onSignalingMessage,
   onOfferReceived,
   onAnswerReceived,
@@ -74,7 +74,7 @@ export function useWebSocketSignaling({
 
   const connect = useCallback((): Promise<void> => {
     if (socket.value && socket.value.readyState === WebSocket.OPEN) {
-      addLog("[WebSocketHook] WebSocket is already connected.");
+      console.log("[WebSocketHook] WebSocket is already connected.");
       return Promise.resolve();
     }
 
@@ -82,7 +82,7 @@ export function useWebSocketSignaling({
     if (effectiveId.value === "") {
       const errorMsg =
         `[WebSocketHook] PREVENTING CONNECTION: Invalid or missing ID ('${effectiveId.value}'). Cannot connect to WebSocket.`;
-      addLog(errorMsg);
+      console.warn(errorMsg); // Changed to console.warn as it's a recoverable issue by setting ID
       console.error(errorMsg);
       // Immediately reject the promise and do not proceed with WebSocket creation
       return Promise.reject(
@@ -96,25 +96,23 @@ export function useWebSocketSignaling({
       // deno-lint-ignore no-window
       const calculatedWsUrl = `${protocol}//${window.location.host}/api/signal`;
       wsUrl.value = calculatedWsUrl; // Store for later use (e.g. logging)
-      addLog(
-        `[WebSocketHook] Attempting to connect to WebSocket: ${calculatedWsUrl} with ID: ${effectiveId.value}`,
+      console.log(
+        `[WebSocketHook] Attempting to connect to WebSocket: ${calculatedWsUrl} with ID: ${effectiveId.value}`
       );
       const ws = new WebSocket(calculatedWsUrl);
 
       ws.onopen = () => {
         socket.value = ws;
         isConnected.value = true;
-        addLog(
-          `[WebSocketHook] Signaling server connected (WebSocket opened to ${calculatedWsUrl}). Registering with ID: ${
-            effectiveId.value || "undefined!"
-          }`,
+        console.log(
+          `[WebSocketHook] Signaling server connected (WebSocket opened to ${calculatedWsUrl}). Registering with ID: ${effectiveId.value || "undefined!"}`
         );
 
         try {
           if (effectiveId.value === "") {
             const errorMsg =
               `[WebSocketHook] [CRITICAL] Registration aborted: Invalid or missing ID ('${effectiveId.value}') at the time of onopen. Closing WebSocket.`;
-            addLog(errorMsg);
+            console.error(errorMsg);
             console.error(errorMsg);
             ws.close(1008, "Invalid ID for registration."); // 1008: Policy Violation
             reject(
@@ -127,20 +125,20 @@ export function useWebSocketSignaling({
             type: "register",
             id: effectiveId.value,
           }));
-          addLog(
-            `[WebSocketHook] Sent register message with ID: ${effectiveId.value}`,
+          console.log(
+            `[WebSocketHook] Sent register message with ID: ${effectiveId.value}`
           );
 
           if (heartbeatInterval.value !== null) {
             clearInterval(heartbeatInterval.value);
           }
-          addLog("[WebSocketHook] Starting WebSocket heartbeat interval.");
+          console.log("[WebSocketHook] Starting WebSocket heartbeat interval.");
           heartbeatInterval.value = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "heartbeat" }));
             } else {
-              addLog(
-                "[WebSocketHook] Heartbeat: WebSocket not open, skipping send.",
+              console.log(
+                "[WebSocketHook] Heartbeat: WebSocket not open, skipping send."
               );
             }
           }, 30000) as unknown as number; // Interval in ms
@@ -151,8 +149,8 @@ export function useWebSocketSignaling({
             `[WebSocketHook] Error sending register message to ${calculatedWsUrl}:`,
             error,
           );
-          addLog(
-            `[WebSocketHook] Error during registration send: ${error.message}`,
+          console.error(
+            `[WebSocketHook] Error during registration send: ${error.message}`
           );
           reject(error); // Reject the promise if registration send fails
         }
@@ -160,7 +158,7 @@ export function useWebSocketSignaling({
 
       ws.onerror = (event) => {
         console.error("[WebSocketHook] WebSocket error event:", event);
-        addLog(`[WebSocketHook] WebSocket error. Check console for details.`);
+        console.warn(`[WebSocketHook] WebSocket error. Check console for details.`);
         isConnected.value = false;
         if (socket.value === ws) { // Clear only if it's the current socket
           socket.value = null;
@@ -168,18 +166,20 @@ export function useWebSocketSignaling({
         if (heartbeatInterval.value !== null) {
           clearInterval(heartbeatInterval.value);
           heartbeatInterval.value = null;
-          addLog(
-            "[WebSocketHook] Cleared heartbeat interval due to WebSocket error.",
+          console.log(
+            "[WebSocketHook] Cleared heartbeat interval due to WebSocket error."
           );
+        }
+        // Call the onServerError callback if provided
+        if (onServerError) {
+          onServerError("WebSocket connection error", "Connection to signaling server failed");
         }
         reject(new Error("WebSocket connection error")); // Reject promise on error
       };
 
       ws.onclose = (event) => {
-        addLog(
-          `[WebSocketHook] WebSocket disconnected from ${wsUrl.value}. Code: ${event.code}, Reason: '${
-            event.reason || "N/A"
-          }', Clean: ${event.wasClean}`,
+        console.log(
+          `[WebSocketHook] WebSocket disconnected from ${wsUrl.value}. Code: ${event.code}, Reason: '${event.reason || "N/A"}', Clean: ${event.wasClean}`
         );
         isConnected.value = false;
         if (socket.value === ws) { // Clear only if it's the current socket
@@ -188,8 +188,8 @@ export function useWebSocketSignaling({
         if (heartbeatInterval.value !== null) {
           clearInterval(heartbeatInterval.value);
           heartbeatInterval.value = null;
-          addLog(
-            "[WebSocketHook] Cleared heartbeat interval due to WebSocket close.",
+          console.log(
+            "[WebSocketHook] Cleared heartbeat interval due to WebSocket close."
           );
         }
         // Note: This promise (from connect()) might have already resolved (onopen) or rejected (onerror).
@@ -205,7 +205,7 @@ export function useWebSocketSignaling({
               "[WebSocketHook] Received non-string WebSocket message:",
               messageData,
             );
-            addLog("[WebSocketHook] Received non-string WebSocket message.");
+            console.warn("[WebSocketHook] Received non-string WebSocket message.");
             return;
           }
           const parsedMessage = JSON.parse(messageData) as WebSocketMessage;
@@ -215,8 +215,8 @@ export function useWebSocketSignaling({
 
           switch (parsedMessage.type) {
             case "controller-kicked":
-              addLog(
-                `[WebSocketHook] Controller kicked. New controller: ${parsedMessage.newControllerId}`,
+              console.log(
+                `[WebSocketHook] Controller kicked. New controller: ${parsedMessage.newControllerId}`
               );
               if (onControllerKicked) {
                 onControllerKicked(parsedMessage.newControllerId as string);
@@ -226,8 +226,8 @@ export function useWebSocketSignaling({
             case "answer":
             case "ice-candidate":
               const messageType = parsedMessage.type;
-              addLog(
-                `[WebSocketHook] Received ${messageType} from: ${parsedMessage.source}`,
+              console.log(
+                `[WebSocketHook] Received ${messageType} from: ${parsedMessage.source}`
               );
 
               // Forward to onSignalingMessage handler if provided
@@ -264,8 +264,8 @@ export function useWebSocketSignaling({
               }
               break;
             case "client-disconnected":
-              addLog(
-                `[WebSocketHook] Client ${parsedMessage.clientId} reported disconnection.`,
+              console.log(
+                `[WebSocketHook] Client ${parsedMessage.clientId} reported disconnection.`
               );
               if (onClientDisconnected) {
                 onClientDisconnected(parsedMessage.clientId as string);
@@ -277,10 +277,10 @@ export function useWebSocketSignaling({
                 parsedMessage.message,
                 parsedMessage.details || "",
               );
-              addLog(
+              console.error(
                 `[WebSocketHook] Server error: ${parsedMessage.message} ${
                   parsedMessage.details || ""
-                }`,
+                }`
               );
               if (onServerError) {
                 onServerError(
@@ -290,8 +290,8 @@ export function useWebSocketSignaling({
               }
               break;
             default:
-              addLog(
-                `[WebSocketHook] Received unhandled WebSocket message type: ${parsedMessage.type}`,
+              console.warn(
+                `[WebSocketHook] Received unhandled WebSocket message type: ${parsedMessage.type}`
               );
               console.log(
                 "[WebSocketHook] Received unhandled WebSocket message:",
@@ -306,15 +306,15 @@ export function useWebSocketSignaling({
             "Raw data:",
             event.data,
           );
-          addLog(
-            `[WebSocketHook] Error processing message: ${error.message}. Data: ${event.data}`,
+          console.error(
+            `[WebSocketHook] Error processing message: ${error.message}. Data: ${event.data}`
           );
         }
       };
     });
   }, [
     effectiveId,
-    addLog,
+    // addLog, // REMOVED
     socket,
     heartbeatInterval,
     wsUrl,
@@ -331,22 +331,22 @@ export function useWebSocketSignaling({
     if (heartbeatInterval.value !== null) {
       clearInterval(heartbeatInterval.value);
       heartbeatInterval.value = null;
-      addLog(
-        "[WebSocketHook] Cleared heartbeat interval on manual disconnect.",
+      console.log(
+        "[WebSocketHook] Cleared heartbeat interval on manual disconnect."
       );
     }
     if (socket.value) {
-      addLog(
-        `[WebSocketHook] Manually closing WebSocket connection to ${wsUrl.value}.`,
+      console.log(
+        `[WebSocketHook] Manually closing WebSocket connection to ${wsUrl.value}.`
       );
       socket.value.close(1000, "Controller initiated disconnect"); // 1000: Normal Closure
       // onclose handler will set socket.value to null and isConnected.value to false
     } else {
-      addLog(
-        "[WebSocketHook] Disconnect called but no active WebSocket connection.",
+      console.warn(
+        "[WebSocketHook] Disconnect called but no active WebSocket connection."
       );
     }
-  }, [socket, heartbeatInterval, addLog, wsUrl]);
+  }, [socket, heartbeatInterval, wsUrl]); // addLog REMOVED
 
   const sendMessage = useCallback((message: WebSocketMessage) => {
     if (socket.value && socket.value.readyState === WebSocket.OPEN) {
@@ -356,23 +356,23 @@ export function useWebSocketSignaling({
       } catch (error) {
         const e = error as Error;
         console.error("[WebSocketHook] Error sending message:", e);
-        addLog(`[WebSocketHook] Error sending message: ${e.message}`);
+        console.error(`[WebSocketHook] Error sending message: ${e.message}`);
       }
     } else {
-      addLog(
-        "[WebSocketHook] WebSocket not connected or not open. Message not sent.",
+      console.warn(
+        "[WebSocketHook] WebSocket not connected or not open. Message not sent."
       );
       console.warn(
         "[WebSocketHook] WebSocket not connected/open. Message not sent:",
         message,
       );
     }
-  }, [socket, addLog]); // Dependencies for useCallback
+  }, [socket]); // addLog REMOVED
 
   // Effect for automatic cleanup when the component using the hook unmounts
   useEffect(() => {
     return () => {
-      addLog("[WebSocketHook] Unmounting. Cleaning up WebSocket.");
+      console.log("[WebSocketHook] Unmounting. Cleaning up WebSocket.");
       disconnect();
     };
   }, [disconnect]); // Dependency on disconnect (which is stable due to useCallback)

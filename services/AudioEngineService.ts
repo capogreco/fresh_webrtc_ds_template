@@ -11,7 +11,7 @@ import {
 // IKEDA MODE MVP REBUILD: Use IkedaModeMVPEngine for ALL modes
 import { IkedaModeMVPEngine } from "../lib/synth/ikeda_mode/engine.ts";
 
-// EXTREME MEASURE: Completely removed imports from default_mode 
+// EXTREME MEASURE: Completely removed imports from default_mode
 // to eliminate recursion bug in engine_COMPLEX_BACKUP.ts
 
 /**
@@ -88,7 +88,7 @@ export class AudioEngineService {
   // Master output and analysis
   private masterVolumeGain: GainNode | null = null;
   private analyserNode: AnalyserNode | null = null;
-  
+
   // Global reverb nodes
   private globalReverb: ConvolverNode | null = null;
   private reverbWetGain: GainNode | null = null;
@@ -116,12 +116,13 @@ export class AudioEngineService {
   private activeMode: ControllerMode | null = null;
   // EXTREME MEASURE: Only use IkedaModeMVPEngine to avoid recursion bug
   private currentModeEngine: IkedaModeMVPEngine | null = null;
-  
+
   // Main mixer input node for connecting all engines
   private mainMixerInput: GainNode | null = null;
 
   // Callback for logging
   private logCallback: (message: string) => void;
+  private globalParamHandlers: Map<string, (value: unknown) => void>;
 
   constructor(
     logCallback: (message: string) => void = () => {},
@@ -137,6 +138,14 @@ export class AudioEngineService {
       ...initialParams,
     };
     this.currentNote = frequencyToNote(this.params.frequency);
+
+    // Initialize global parameter handlers
+    this.globalParamHandlers = new Map();
+    this.globalParamHandlers.set("ikedaGlobalMasterVolume", this.setGlobalMasterVolume.bind(this));
+    this.globalParamHandlers.set("defaultGlobalMasterVolume", this.setGlobalMasterVolume.bind(this));
+    this.globalParamHandlers.set("global_volume", this.setGlobalMasterVolume.bind(this));
+    this.globalParamHandlers.set("ikedaGlobalReverbAmount", this.setGlobalReverbAmount.bind(this));
+    this.globalParamHandlers.set("defaultGlobalReverbAmount", this.setGlobalReverbAmount.bind(this));
   }
 
   /**
@@ -159,22 +168,30 @@ export class AudioEngineService {
         this.masterVolumeGain = this.audioContext.createGain();
         this.masterVolumeGain.gain.value = this.params.volume;
         this.masterVolumeGain.connect(this.audioContext.destination);
-        this.log(`// DEBUG-AUDIO: AES.initializeAudioContext: Created masterVolumeGain with value ${this.params.volume} and connected to destination`);
+        this.log(
+          `// DEBUG-AUDIO: AES.initializeAudioContext: Created masterVolumeGain with value ${this.params.volume} and connected to destination`,
+        );
 
         // Create analyzer for visualizations (connect to master volume)
         this.analyserNode = this.audioContext.createAnalyser();
         this.analyserNode.fftSize = 2048;
         this.analyserNode.connect(this.masterVolumeGain);
-        this.log("// DEBUG-AUDIO: AES.initializeAudioContext: Created analyserNode and connected to masterVolumeGain");
-        
+        this.log(
+          "// DEBUG-AUDIO: AES.initializeAudioContext: Created analyserNode and connected to masterVolumeGain",
+        );
+
         // Create a main mixer input node for connecting different engines
         this.mainMixerInput = this.audioContext.createGain();
         this.mainMixerInput.gain.value = 1.0; // Unity gain for mixer
         this.mainMixerInput.connect(this.analyserNode);
-        this.log("// DEBUG-AUDIO: AES.initializeAudioContext: Created mainMixerInput with value 1.0 and connected to analyserNode");
+        this.log(
+          "// DEBUG-AUDIO: AES.initializeAudioContext: Created mainMixerInput with value 1.0 and connected to analyserNode",
+        );
 
         // Log audio path
-        this.log("// DEBUG-AUDIO: AES.initializeAudioContext: Audio path: engine output -> mainMixerInput -> analyserNode -> masterVolumeGain -> destination");
+        this.log(
+          "// DEBUG-AUDIO: AES.initializeAudioContext: Audio path: engine output -> mainMixerInput -> analyserNode -> masterVolumeGain -> destination",
+        );
 
         // Initialize the standard synth mode graph
         this.initializeStandardSynthGraph();
@@ -184,14 +201,18 @@ export class AudioEngineService {
 
         // Ensure audio context is running
         await this.resumeAudioContext();
-        
-        this.log(`// DEBUG-AUDIO: AES.initializeAudioContext: AudioContext initialized and running. State: ${this.audioContext.state}`);
+
+        this.log(
+          `// DEBUG-AUDIO: AES.initializeAudioContext: AudioContext initialized and running. State: ${this.audioContext.state}`,
+        );
       } else if (this.audioContext.state === "suspended") {
         // If context exists but is suspended, resume it
         await this.resumeAudioContext();
       }
     } catch (error) {
-      this.log(`// DEBUG-AUDIO: AES.initializeAudioContext: ERROR initializing audio context: ${error}`);
+      this.log(
+        `// DEBUG-AUDIO: AES.initializeAudioContext: ERROR initializing audio context: ${error}`,
+      );
       throw new AudioEngineError(
         `Failed to initialize audio context: ${
           error instanceof Error ? error.message : String(error)
@@ -205,9 +226,11 @@ export class AudioEngineService {
    */
   private initializeStandardSynthGraph(): void {
     this.log("// DEBUG-AUDIO: AES.initializeStandardSynthGraph: ENTERED");
-    
+
     if (!this.audioContext || !this.analyserNode || !this.masterVolumeGain) {
-      this.log("// DEBUG-AUDIO: AES.initializeStandardSynthGraph: Missing required nodes, cannot initialize");
+      this.log(
+        "// DEBUG-AUDIO: AES.initializeStandardSynthGraph: Missing required nodes, cannot initialize",
+      );
       return;
     }
 
@@ -219,28 +242,44 @@ export class AudioEngineService {
 
     // Connect filter to analyzer
     this.filterNode.connect(this.analyserNode);
-    this.log("// DEBUG-AUDIO: AES.initializeStandardSynthGraph: Connected filterNode to analyserNode");
+    this.log(
+      "// DEBUG-AUDIO: AES.initializeStandardSynthGraph: Connected filterNode to analyserNode",
+    );
 
     // Create gain node
     this.gainNode = this.audioContext.createGain();
     this.gainNode.gain.value = 0; // Start with gain at 0
     this.gainNode.connect(this.filterNode);
-    this.log("// DEBUG-AUDIO: AES.initializeStandardSynthGraph: Connected gainNode to filterNode");
+    this.log(
+      "// DEBUG-AUDIO: AES.initializeStandardSynthGraph: Connected gainNode to filterNode",
+    );
 
     // Set up vibrato LFO
     this.setupVibrato();
-    
+
     // Initialize global reverb
     this.initializeGlobalReverb();
-    
+
     // Log the audio connection state
-    this.log(`// DEBUG-AUDIO: AES Init: mainMixerInput connected to analyserNode? ${!!this.mainMixerInput}`);
-    this.log(`// DEBUG-AUDIO: AES Init: analyserNode connected to masterVolumeGain? ${!!this.analyserNode && !!this.masterVolumeGain}`);
-    this.log(`// DEBUG-AUDIO: AES Init: masterVolumeGain connected to destination? ${!!this.masterVolumeGain}`);
-    this.log(`// DEBUG-AUDIO: AES Init: Initial masterVolumeGain.gain.value: ${this.masterVolumeGain.gain.value}`);
+    this.log(
+      `// DEBUG-AUDIO: AES Init: mainMixerInput connected to analyserNode? ${!!this
+        .mainMixerInput}`,
+    );
+    this.log(
+      `// DEBUG-AUDIO: AES Init: analyserNode connected to masterVolumeGain? ${
+        !!this.analyserNode && !!this.masterVolumeGain
+      }`,
+    );
+    this.log(
+      `// DEBUG-AUDIO: AES Init: masterVolumeGain connected to destination? ${!!this
+        .masterVolumeGain}`,
+    );
+    this.log(
+      `// DEBUG-AUDIO: AES Init: Initial masterVolumeGain.gain.value: ${this.masterVolumeGain.gain.value}`,
+    );
     this.log("// DEBUG-AUDIO: AES.initializeStandardSynthGraph: EXITED");
   }
-  
+
   /**
    * Initialize global reverb for use with all modes
    */
@@ -249,62 +288,76 @@ export class AudioEngineService {
     this.log("// URGENT_DEBUG: AES.initializeGlobalReverb: ENTERED");
 
     if (!this.audioContext || !this.analyserNode) {
-      this.log("Cannot initialize global reverb: AudioContext or AnalyserNode not available");
+      this.log(
+        "Cannot initialize global reverb: AudioContext or AnalyserNode not available",
+      );
       return;
     }
-    
+
     try {
       // Create reverb nodes
       this.globalReverb = this.audioContext.createConvolver();
       this.reverbWetGain = this.audioContext.createGain();
       this.reverbDryGain = this.audioContext.createGain();
-      
-      // Set initial gain values (30% wet, 70% dry)
-      this.reverbWetGain.gain.value = 0.3;
-      this.reverbDryGain.gain.value = 0.7;
-      
+
+      // Set initial gain values for 0% reverb (0 wet, 100% dry)
+      // This ensures reverb is off by default until explicitly set by parameters.
+      this.reverbWetGain.gain.value = 0.0; // Corresponds to sin(0 * Math.PI / 2) for 0 amount
+      this.reverbDryGain.gain.value = 1.0; // Corresponds to cos(0 * Math.PI / 2) for 0 amount
+
       // Connect reverb to wet gain, then to analyzer
       this.globalReverb.connect(this.reverbWetGain);
       this.reverbWetGain.connect(this.analyserNode);
-      
+
       // Connect dry gain directly to analyzer
       this.reverbDryGain.connect(this.analyserNode);
-      
+
       // Try to load impulse response from file
       try {
         const response = await fetch("/R1NuclearReactorHall.m4a");
         const arrayBuffer = await response.arrayBuffer();
-        const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-        
+        const audioBuffer = await this.audioContext.decodeAudioData(
+          arrayBuffer,
+        );
+
         this.globalReverb.buffer = audioBuffer;
-        this.log("Global reverb: Loaded impulse response from R1NuclearReactorHall.m4a");
+        this.log(
+          "Global reverb: Loaded impulse response from R1NuclearReactorHall.m4a",
+        );
       } catch (error) {
         this.log(`Error loading impulse response file: ${error}`);
-        
+
         // Create synthetic impulse response as fallback
         const sampleRate = this.audioContext.sampleRate;
         const decay = 2.0; // 2 second decay
         const numSamples = Math.ceil(sampleRate * decay);
-        const impulseBuffer = this.audioContext.createBuffer(2, numSamples, sampleRate);
-        
+        const impulseBuffer = this.audioContext.createBuffer(
+          2,
+          numSamples,
+          sampleRate,
+        );
+
         // Fill both channels with exponentially decaying noise
         for (let channel = 0; channel < 2; channel++) {
           const channelData = impulseBuffer.getChannelData(channel);
           for (let i = 0; i < numSamples; i++) {
             // Random noise with exponential decay
-            channelData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sampleRate * decay / 6));
+            channelData[i] = (Math.random() * 2 - 1) *
+              Math.exp(-i / (sampleRate * decay / 6));
           }
         }
-        
+
         this.globalReverb.buffer = impulseBuffer;
-        this.log("Global reverb: Created synthetic impulse response as fallback");
+        this.log(
+          "Global reverb: Created synthetic impulse response as fallback",
+        );
       }
-      
+
       this.log("Global reverb initialized successfully");
     } catch (error) {
       this.log(`Failed to initialize global reverb: ${error}`);
     }
-    
+
     console.log("// URGENT_DEBUG: AES.initializeGlobalReverb: EXITED");
     this.log("// URGENT_DEBUG: AES.initializeGlobalReverb: EXITED");
   }
@@ -377,10 +430,19 @@ export class AudioEngineService {
       if (!this.audioContext) {
         throw new Error("Audio context not initialized");
       }
-      
-      this.log(`// EXTREME_MEASURE: AES.setMode: Using IkedaModeMVPEngine for ALL modes.`);
+
+      this.log(
+        `// EXTREME_MEASURE: AES.setMode: Using IkedaModeMVPEngine for ALL modes.`,
+      );
       this.log(`// EXTREME_MEASURE: AES.setMode: current mode is ${newMode}`);
-      
+
+      // === PRE-INSTANTIATION DEBUG LOG ===
+      const audioContextState = this.audioContext ? this.audioContext.state : "null or undefined";
+      this.log(`AES.setMode: PRE-IkedaModeMVPEngine instantiation. AudioContext state: ${audioContextState}. Attempting to pass logger.`);
+      // Test the this.log function directly here to ensure it's working before being passed
+      this.log("AES.setMode: Direct log test before engine instantiation SUCCESSFUL.");
+      // === END PRE-INSTANTIATION DEBUG LOG ===
+
       // Create analyzer node destination for the engine if needed
       if (!this.analyserNode) {
         this.analyserNode = this.audioContext.createAnalyser();
@@ -392,22 +454,29 @@ export class AudioEngineService {
           this.analyserNode.connect(this.audioContext.destination);
         }
       }
-      
+
       // CRITICAL: Always use IkedaModeMVPEngine regardless of mode
       this.currentModeEngine = new IkedaModeMVPEngine(
         this.audioContext,
-        (logMessage: string) => this.log(`IkedaMVPEngine(${newMode}): ${logMessage}`), 
-        initialParams || {} 
+        (logMessage: string) => {
+          // === LOGGER PASSED TO IKEDA ENGINE - TEST CALL ===
+          console.log(`AES: Logger for IkedaMVPEngine called with: ${logMessage}`);
+          // === END LOGGER TEST CALL ===
+          this.log(`IkedaMVPEngine(${newMode}): ${logMessage}`);
+        },
+        initialParams || {},
       );
-      this.log(`AudioEngineService: IkedaModeMVPEngine INSTANTIATED for mode ${newMode}.`);
+      this.log(
+        `AudioEngineService: IkedaModeMVPEngine INSTANTIATED for mode ${newMode}.`,
+      );
       this.connectCurrentEngineOutput();
       this.isCurrentModeVolumeCheckPending = true; // Always start with volume check
-      
+
       // Notify useAudioEngine about volume check state
       if (this.onEngineStateChangeCallback) {
         this.onEngineStateChangeCallback({ isVolumeCheckPending: true });
       }
-      
+
       // Apply any initial parameters if provided
       if (initialParams) {
         for (const [paramId, value] of Object.entries(initialParams)) {
@@ -425,14 +494,15 @@ export class AudioEngineService {
         `AudioEngineService: Error occurred, defaulting to IKEDA mode (MVP)`,
       );
       this.activeMode = KNOWN_CONTROLLER_MODES.IKEDA;
-      
+
       // Try to initialize the IkedaModeMVPEngine
       try {
         if (this.audioContext) {
           this.currentModeEngine = new IkedaModeMVPEngine(
             this.audioContext,
-            (logMessage: string) => this.log(`IkedaMVPEngine(recovery): ${logMessage}`),
-            {} // Default params
+            (logMessage: string) =>
+              this.log(`IkedaMVPEngine(recovery): ${logMessage}`),
+            {}, // Default params
           );
           this.log(
             `AudioEngineService: IkedaModeMVPEngine initialized after error recovery`,
@@ -606,94 +676,55 @@ export class AudioEngineService {
       }', activeMode='${this.activeMode}'`,
     );
 
-    // Handle global parameters that should be processed directly by AudioEngineService regardless of mode
-    if (
-      paramId === "defaultGlobalMasterVolume" || paramId === "global_volume" || 
-      paramId === "ikedaGlobalMasterVolume" // Handle Ikeda mode master volume
-    ) {
-      if (this.masterVolumeGain && this.audioContext) {
-        const volume = typeof value === "number"
-          ? value
-          : parseFloat(String(value));
-        if (!isNaN(volume)) {
-          // Set the master volume gain
-          this.masterVolumeGain.gain.setTargetAtTime(
-            volume,
-            this.audioContext.currentTime,
-            0.015, // Slightly slower for smoother transitions
-          );
-          this.log(`AES: Set master volume to ${volume}`);
-
-          // EXTREME MEASURE: No longer forwarding volume to DefaultModeEngine
-          // Instead, always handle at the AudioEngineService level
-        }
-      }
+    // Check global parameter handlers first
+    const globalHandler = this.globalParamHandlers.get(paramId);
+    if (globalHandler) {
+      globalHandler(value);
       return;
     }
 
-    // Handle reverb amount parameters at the AudioEngineService level
-    if (paramId === "defaultGlobalReverbAmount" || paramId === "ikedaGlobalReverbAmount") {
-      console.log(`// URGENT_DEBUG: AES.updateParameter: Handling ${paramId}. Value: ${value}`);
-      this.log(`// URGENT_DEBUG: AES.updateParameter: Handling ${paramId}. Value: ${value}`);
-      
-      // Get the reverb amount as a number
-      const reverbAmount = typeof value === "number"
-        ? value
-        : parseFloat(String(value));
-      
-      if (!isNaN(reverbAmount) && this.audioContext) {
-        // Using our own global reverb implementation for all modes
-        if (this.reverbWetGain && this.reverbDryGain) {
-          console.log(`// URGENT_DEBUG: AES.updateParameter: Updating gain values for global reverb. reverbAmount: ${reverbAmount}`);
-          // Apply the reverb amount using equal power crossfade for wet/dry balance
-          // This ensures constant perceived volume regardless of the reverb mix
-          const wetGain = Math.sin(reverbAmount * Math.PI/2);
-          const dryGain = Math.cos(reverbAmount * Math.PI/2);
-          
-          this.reverbWetGain.gain.setTargetAtTime(
-            wetGain,
-            this.audioContext.currentTime,
-            0.05
-          );
-          
-          this.reverbDryGain.gain.setTargetAtTime(
-            dryGain,
-            this.audioContext.currentTime,
-            0.05
-          );
-          
-          this.log(`AES: Set global reverb mix: wet=${wetGain.toFixed(2)}, dry=${dryGain.toFixed(2)}`);
-        }
-      }
-      return;
-    }
-    
     // Forward recognized MVP params to IkedaModeMVPEngine (for all modes)
     if (this.currentModeEngine) {
       // List of params handled by IkedaModeMVPEngine for the MVP
-      const ikedaMVPParams = ["ikedaGlobalOnOff", "defaultGlobalOnOff", "ikedaPinkNoiseLevel", "ikedaVolumeCheckLevel"];
-      
+      const ikedaMVPParams = [
+        "ikedaGlobalOnOff",
+        "defaultGlobalOnOff",
+        "ikedaPinkNoiseLevel",
+        "ikedaVolumeCheckLevel",
+      ];
+
       // EXTREME MEASURE: Translate DEFAULT mode parameters to IKEDA mode parameters
       let effectiveParamId = paramId;
       if (paramId === "defaultGlobalOnOff") {
         effectiveParamId = "ikedaGlobalOnOff";
-        this.log(`EXTREME_MEASURE: Translating defaultGlobalOnOff to ikedaGlobalOnOff`);
+        this.log(
+          `EXTREME_MEASURE: Translating defaultGlobalOnOff to ikedaGlobalOnOff`,
+        );
       }
-      
-      if (ikedaMVPParams.includes(paramId) || paramId === "basic.active" || paramId === "defaultActive") {
+
+      if (
+        ikedaMVPParams.includes(paramId) || paramId === "basic.active" ||
+        paramId === "defaultActive"
+      ) {
         // Ensure the parameter is in a format the engine can handle
         let finalParamId = effectiveParamId;
         if (paramId === "basic.active" || paramId === "defaultActive") {
           finalParamId = "ikedaGlobalOnOff";
-          this.log(`EXTREME_MEASURE: Translating ${paramId} to ikedaGlobalOnOff`);
+          this.log(
+            `EXTREME_MEASURE: Translating ${paramId} to ikedaGlobalOnOff`,
+          );
         }
-        
-        this.log(`AES.updateParameter: Forwarding to IkedaModeMVPEngine: ID='${finalParamId}'`);
+
+        this.log(
+          `AES.updateParameter: Forwarding to IkedaModeMVPEngine: ID='${finalParamId}'`,
+        );
         this.currentModeEngine.updateParam(finalParamId, value);
       } else {
-        this.log(`AES.updateParameter: Param '${paramId}' not specifically handled by IkedaModeMVPEngine in current MVP scope.`);
+        this.log(
+          `AES.updateParameter: Param '${paramId}' not specifically handled by IkedaModeMVPEngine in current MVP scope.`,
+        );
       }
-      
+
       // Special handling for basic volume parameter (if not handled as global volume)
       if (paramId === "basic.volume" || paramId === "defaultMasterVolume") {
         if (this.masterVolumeGain && this.audioContext) {
@@ -712,7 +743,7 @@ export class AudioEngineService {
           }
         }
       }
-      
+
       // Handle global tempo if needed
       if (
         paramId === "basic.tempo" || paramId === "defaultTempo" ||
@@ -724,24 +755,86 @@ export class AudioEngineService {
       this.log(
         `Cannot update parameter ${paramId}: No engine initialized for mode '${this.activeMode}'`,
       );
-      
+
       // Attempt to initialize engine for current mode
       if (this.audioContext) {
         try {
           // EXTREME MEASURE: Always use IkedaModeMVPEngine
-          this.log(`Attempting to initialize IkedaModeMVPEngine to handle parameter ${paramId}`);
+          this.log(
+            `Attempting to initialize IkedaModeMVPEngine to handle parameter ${paramId}`,
+          );
           this.currentModeEngine = new IkedaModeMVPEngine(
             this.audioContext,
-            (message) => this.log(message)
+            (message) => this.log(message),
           );
           this.connectCurrentEngineOutput();
-          
+
           // Now try to forward the parameter
           this.updateParameter(paramId, value);
         } catch (error) {
           this.log(`Failed to initialize IkedaModeMVPEngine: ${error}`);
         }
       }
+    }
+  }
+
+  private setGlobalMasterVolume(value: unknown): void {
+    if (this.masterVolumeGain && this.audioContext) {
+      const volume = typeof value === "number"
+        ? value
+        : parseFloat(String(value));
+      if (!isNaN(volume)) {
+        this.masterVolumeGain.gain.setTargetAtTime(
+          volume,
+          this.audioContext.currentTime,
+          0.015, // Slightly slower for smoother transitions
+        );
+        this.log(`AES: Set master volume to ${volume}`);
+      } else {
+        this.log(`AES: Invalid value for master volume: ${String(value)}`);
+      }
+    } else {
+      this.log("AES: Master volume gain node or audio context not available for setGlobalMasterVolume.");
+    }
+  }
+
+  private setGlobalReverbAmount(value: unknown): void {
+    this.log(
+      `AES: Handling global reverb amount. Value: ${String(value)}`,
+    );
+
+    const reverbAmount = typeof value === "number"
+      ? value
+      : parseFloat(String(value));
+
+    if (!isNaN(reverbAmount) && this.audioContext) {
+      if (this.reverbWetGain && this.reverbDryGain) {
+        this.log(
+          `AES: Updating gain values for global reverb. reverbAmount: ${reverbAmount}`,
+        );
+        const wetGain = Math.sin(reverbAmount * Math.PI / 2);
+        const dryGain = Math.cos(reverbAmount * Math.PI / 2);
+
+        this.reverbWetGain.gain.setTargetAtTime(
+          wetGain,
+          this.audioContext.currentTime,
+          0.05,
+        );
+        this.reverbDryGain.gain.setTargetAtTime(
+          dryGain,
+          this.audioContext.currentTime,
+          0.05,
+        );
+        this.log(
+          `AES: Set global reverb mix: wet=${wetGain.toFixed(2)}, dry=${dryGain.toFixed(2)}`,
+        );
+      } else {
+        this.log("AES: Reverb wet/dry gain nodes not available for setGlobalReverbAmount.");
+      }
+    } else {
+      this.log(
+        `AES: Invalid value for reverb amount or audio context not available: ${String(value)}`,
+      );
     }
   }
 
@@ -1326,52 +1419,77 @@ export class AudioEngineService {
    * Connect the current engine's output to the main mixer
    */
   private connectCurrentEngineOutput(): void {
-    this.log(`// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Called for activeMode='${this.activeMode}'.`);
-    
-    if (!this.currentModeEngine || typeof (this.currentModeEngine as any).getOutputNode !== 'function') {
-      this.log("// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Current mode engine or its getOutputNode method IS MISSING.");
+    this.log(
+      `// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Called for activeMode='${this.activeMode}'.`,
+    );
+
+    if (
+      !this.currentModeEngine ||
+      typeof (this.currentModeEngine as any).getOutputNode !== "function"
+    ) {
+      this.log(
+        "// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Current mode engine or its getOutputNode method IS MISSING.",
+      );
       return;
     }
-    
+
     try {
       const ikedaEngine = this.currentModeEngine as IkedaModeMVPEngine;
       const outputNode = ikedaEngine.getOutputNode();
-      
-      this.log(`// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Engine is type: ${this.currentModeEngine.constructor.name}`);
-      
+
+      this.log(
+        `// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Engine is type: ${this.currentModeEngine.constructor.name}`,
+      );
+
       if (!outputNode) {
-         this.log("// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Engine output node is NULL or UNDEFINED.");
-         return;
+        this.log(
+          "// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Engine output node is NULL or UNDEFINED.",
+        );
+        return;
       }
-      
-      this.log(`// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Got engineOutputNode. mainMixerInput: ${!!this.mainMixerInput}, analyserNode: ${!!this.analyserNode}, masterVolumeGain: ${!!this.masterVolumeGain}`);
-      
+
+      this.log(
+        `// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Got engineOutputNode. mainMixerInput: ${!!this
+          .mainMixerInput}, analyserNode: ${!!this
+          .analyserNode}, masterVolumeGain: ${!!this.masterVolumeGain}`,
+      );
+
       // Connect to the global reverb wet/dry split if available
       if (this.globalReverb && this.reverbWetGain && this.reverbDryGain) {
         // Connect engine output to both the dry path and the reverb (wet) path
         outputNode.connect(this.reverbDryGain);
         outputNode.connect(this.globalReverb);
-        this.log("// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Successfully connected IkedaModeMVPEngine output to global reverb wet/dry paths");
-      } 
-      // Fallback to direct connection if reverb not available
+        this.log(
+          "// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Successfully connected IkedaModeMVPEngine output to global reverb wet/dry paths",
+        );
+      } // Fallback to direct connection if reverb not available
       else if (this.mainMixerInput) {
         outputNode.connect(this.mainMixerInput);
-        this.log("// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Successfully connected IkedaModeMVPEngine output to main mixer (reverb not available)");
-      }
-      // Last resort - connect directly to analyzer
+        this.log(
+          "// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Successfully connected IkedaModeMVPEngine output to main mixer (reverb not available)",
+        );
+      } // Last resort - connect directly to analyzer
       else if (this.analyserNode) {
         outputNode.connect(this.analyserNode);
-        this.log("// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Successfully connected IkedaModeMVPEngine output directly to analyzer (no reverb or mixer available)");
+        this.log(
+          "// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Successfully connected IkedaModeMVPEngine output directly to analyzer (no reverb or mixer available)",
+        );
       } else {
-        this.log("// DEBUG-AUDIO: AES.connectCurrentEngineOutput: WARNING - Could not connect engine output - no valid destination available!");
+        this.log(
+          "// DEBUG-AUDIO: AES.connectCurrentEngineOutput: WARNING - Could not connect engine output - no valid destination available!",
+        );
       }
-      
+
       // Print audio context state
       if (this.audioContext) {
-        this.log(`// DEBUG-AUDIO: AES.connectCurrentEngineOutput: AudioContext state: ${this.audioContext.state}`);
+        this.log(
+          `// DEBUG-AUDIO: AES.connectCurrentEngineOutput: AudioContext state: ${this.audioContext.state}`,
+        );
       }
     } catch (error) {
-      this.log(`// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Error connecting engine output: ${error}`);
+      this.log(
+        `// DEBUG-AUDIO: AES.connectCurrentEngineOutput: Error connecting engine output: ${error}`,
+      );
       console.error("Error connecting engine output in AES:", error);
     }
   }
@@ -1382,13 +1500,17 @@ export class AudioEngineService {
   public confirmVolumeCheckComplete(): void {
     // Verify the engine type for debugging
     if (this.currentModeEngine) {
-      this.log(`// URGENT_DEBUG: confirmVolumeCheckComplete called, engine type: ${this.currentModeEngine.constructor.name}`);
+      this.log(
+        `// URGENT_DEBUG: confirmVolumeCheckComplete called, engine type: ${this.currentModeEngine.constructor.name}`,
+      );
     }
-    
+
     // EXTREME MEASURE: Always use IkedaModeMVPEngine for all modes
     if (this.currentModeEngine) {
-      this.log(`AES: Volume check confirmed by UI. Activating full generative engine for ${this.activeMode} mode.`);
-      
+      this.log(
+        `AES: Volume check confirmed by UI. Activating full generative engine for ${this.activeMode} mode.`,
+      );
+
       // Always using IkedaModeMVPEngine regardless of mode
       this.currentModeEngine.activateFullGenerativeMode();
       this.isCurrentModeVolumeCheckPending = false;
@@ -1401,22 +1523,23 @@ export class AudioEngineService {
       this.log(
         "AES: confirmVolumeCheckComplete called but no engine is available. Attempting to create one.",
       );
-      
+
       // Try to create an engine if one doesn't exist
       if (this.audioContext) {
         try {
           this.log(`AES: Creating IkedaModeMVPEngine on demand.`);
-          
+
           this.currentModeEngine = new IkedaModeMVPEngine(
             this.audioContext,
-            (logMessage: string) => this.log(`IkedaMVPEngine(late): ${logMessage}`),
-            {} // Default params
+            (logMessage: string) =>
+              this.log(`IkedaMVPEngine(late): ${logMessage}`),
+            {}, // Default params
           );
-          
+
           this.connectCurrentEngineOutput();
           this.currentModeEngine.activateFullGenerativeMode();
           this.isCurrentModeVolumeCheckPending = false;
-          
+
           if (this.onEngineStateChangeCallback) {
             this.onEngineStateChangeCallback({ isVolumeCheckPending: false });
           }

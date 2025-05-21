@@ -1,15 +1,17 @@
 // No need to import h when using automatic runtime in Fresh
 import Controller from "../../islands/Controller.tsx";
 
+// Define mockUser outside the component function to make its reference stable
+const STABLE_MOCK_USER = {
+  email: "dev@example.com",
+  name: "Developer",
+  id: "dev-user-id",
+};
+const CONTROLLER_KEY = "main-controller-island";
+
 // Simple development page that bypasses OAuth
 export default function ControllerDevPage() {
-  // Mock user for development
-  const mockUser = {
-    email: "dev@example.com",
-    name: "Developer",
-    id: "dev-user-id",
-  };
-
+  console.log("[ControllerDevPage] function executed");
   return (
     <div>
       <div
@@ -18,7 +20,11 @@ export default function ControllerDevPage() {
       >
         <strong>Development Mode</strong> - OAuth authentication bypassed
       </div>
-      <Controller user={mockUser} clientId="dev-controller-id" />
+      <Controller
+        key={CONTROLLER_KEY}
+        user={STABLE_MOCK_USER}
+        clientId="dev-controller-id"
+      />
     </div>
   );
 }

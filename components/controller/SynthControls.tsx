@@ -88,7 +88,8 @@ export function SynthControls(
 
         {/* Dynamically generated controls */}
         {paramDescriptors.filter((descriptor) =>
-          descriptor.id !== "oscillatorEnabled" // Already handled by Note On/Off
+          descriptor.id !== "oscillatorEnabled" && // Already handled by Note On/Off
+          descriptor.id !== "ikedaVolumeCheckLevel" // Exclude volume check level as it's not a user-adjustable UI element
           // Add other parameters to exclude from generic rendering if they have custom UI
         ).map((descriptor: SynthParamDescriptor) => {
           const currentValue = params[descriptor.id] ?? descriptor.defaultValue;

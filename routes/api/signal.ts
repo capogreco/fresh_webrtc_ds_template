@@ -119,8 +119,8 @@ export const handler: Handlers = {
               activeConnections.set(clientId!, socket);
               console.log(`Client registered with ID: ${clientId}`);
 
-              // Check if this is a controller client (based on ID prefix)
-              if (clientId!.startsWith("controller-")) {
+              // Check if this is a controller client (based on ID prefix or specific dev ID)
+              if (clientId!.startsWith("controller-") || clientId === "dev-controller-id") {
                 console.log(`Detected controller client: ${clientId}`);
                 // Register as active controller
                 await registerController(clientId!);

@@ -3,24 +3,20 @@ import { WebSocketMessage } from "../islands/hooks/useWebSocketSignaling.ts";
 
 export interface ConnectionInfo {
   peerConnection: RTCPeerConnection;
-  dataChannel: RTCDataChannel | null;
-  connected: boolean;
+  reliableControlChannel: RTCDataChannel | null;
+  streamingUpdatesChannel: RTCDataChannel | null;
+  connected: boolean; // True if reliableControlChannel is open
 }
 
 export interface WebRTCServiceCallbacks {
   addLog: (text: string) => void;
-  onConnectionStateChange: (clientId: string, connected: boolean) => void;
-  onDataChannelMessage: (clientId: string, data: unknown) => void;
-  onDataChannelOpen: (clientId: string, dataChannel: RTCDataChannel) => void;
-  onDataChannelClose: (clientId: string) => void;
+  onConnectionStateChange: (clientId: string, connected: boolean) => void; // Overall WebRTC connection
+  onDataChannelMessage: (clientId: string, channelLabel: string, data: unknown) => void;
+  onDataChannelOpen: (clientId: string, dataChannel: RTCDataChannel) => void; // Called for each channel
+  onDataChannelClose: (clientId: string, channelLabel: string) => void; // Called for each channel
   onClientRemoved: (clientId: string) => void;
 }
 
-export interface PingResult {
-  clientId: string;
-  latency: number;
-  success: boolean;
-}
 
 export class WebRTCService {
   private connections: Map<string, ConnectionInfo>;
@@ -29,7 +25,6 @@ export class WebRTCService {
     sendMessage: (message: WebSocketMessage) => void;
   };
   private controllerId: Signal<string>;
-  private pingInterval: number | null = null;
 
   constructor(
     controllerId: Signal<string>,
@@ -68,20 +63,24 @@ export class WebRTCService {
     });
 
     // Create data channel
-    const dataChannel = peerConnection.createDataChannel("synthControlData", {
-      ordered: true,
-    });
-
-    // Set up event handlers for the data channel
-    this.setupDataChannelEvents(dataChannel, clientId);
+    // Data channels are typically created by the offerer.
+    // The controller (answerer) will receive them via peerConnection.ondatachannel.
+    // If controller needs to initiate, it would create offer and data channels here.
+    // For now, assuming client (offerer) creates channels.
+    this.callbacks.addLog(`[WebRTCService] initRTC: Setting up ondatachannel handler for ${clientId}`);
+    peerConnection.ondatachannel = (event) => {
+      this.callbacks.addLog(`[WebRTCService] initRTC: ondatachannel event for ${clientId}, label: ${event.channel.label}`);
+      this.handleDataChannelEvent(event, clientId);
+    };
 
     // Set up event handlers for the RTCPeerConnection
     this.setupPeerConnectionEvents(peerConnection, clientId);
 
-    // Store the new connection
+    // Store the new connection (channels will be added via ondatachannel)
     this.connections.set(clientId, {
       peerConnection,
-      dataChannel,
+      reliableControlChannel: null,
+      streamingUpdatesChannel: null,
       connected: false,
     });
 
@@ -116,37 +115,52 @@ export class WebRTCService {
     clientId: string,
   ): void {
     dataChannel.onopen = () => {
-      this.callbacks.addLog(`Data channel opened to ${clientId}`);
+      this.callbacks.addLog(`[WebRTCService] Data channel [${dataChannel.label}] opened to ${clientId}`);
       const connection = this.connections.get(clientId);
       if (connection) {
-        connection.connected = true;
+        if (dataChannel.label === "reliable_control") {
+          connection.connected = true; // Main connection status tied to reliable channel
+          this.callbacks.onConnectionStateChange(clientId, true);
+        }
+        // Always update the specific channel in connection info
+        if (dataChannel.label === "reliable_control") connection.reliableControlChannel = dataChannel;
+        else if (dataChannel.label === "streaming_updates") connection.streamingUpdatesChannel = dataChannel;
+        
         this.connections.set(clientId, connection);
-        this.callbacks.onConnectionStateChange(clientId, true);
-        this.callbacks.onDataChannelOpen(clientId, dataChannel);
+        this.callbacks.onDataChannelOpen(clientId, dataChannel); // Notify manager about this specific channel
       }
     };
 
     dataChannel.onclose = () => {
-      this.callbacks.addLog(`Data channel closed to ${clientId}`);
+      this.callbacks.addLog(`[WebRTCService] Data channel [${dataChannel.label}] closed to ${clientId}`);
       const connection = this.connections.get(clientId);
       if (connection) {
-        connection.connected = false;
+        if (dataChannel.label === "reliable_control") {
+          connection.connected = false;
+          this.callbacks.onConnectionStateChange(clientId, false); // Overall connection lost
+        }
+         // Clear the specific channel from connection info
+        if (dataChannel.label === "reliable_control") connection.reliableControlChannel = null;
+        else if (dataChannel.label === "streaming_updates") connection.streamingUpdatesChannel = null;
+
         this.connections.set(clientId, connection);
-        this.callbacks.onConnectionStateChange(clientId, false);
-        this.callbacks.onDataChannelClose(clientId);
+        this.callbacks.onDataChannelClose(clientId, dataChannel.label);
       }
     };
 
     dataChannel.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        this.callbacks.onDataChannelMessage(clientId, data);
-      } catch (_error) {
+        this.callbacks.onDataChannelMessage(clientId, dataChannel.label, data);
+      } catch (error) {
+        // Improved error handling with better logging
+        const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(
-          `Error parsing data channel message from ${clientId}:`,
-          _error,
+          `[WebRTCService] Error parsing data channel message from ${clientId} on [${dataChannel.label}]:`,
+          error,
           event.data,
         );
+        this.callbacks.addLog(`Error parsing message from client ${clientId}: ${errorMessage}`);
       }
     };
   }
@@ -227,22 +241,15 @@ export class WebRTCService {
 
       // Handle data channel created by the client
       peerConnection.ondatachannel = (event) => {
-        this.callbacks.addLog(`Received data channel from ${clientId}`);
-        const dataChannel = event.channel;
-        this.setupDataChannelEvents(dataChannel, clientId);
-
-        // Store the data channel in the connection info
-        const connectionInfo = this.connections.get(clientId);
-        if (connectionInfo) {
-          connectionInfo.dataChannel = dataChannel;
-          this.connections.set(clientId, connectionInfo);
-        }
+        this.callbacks.addLog(`[WebRTCService] handleClientOffer: ondatachannel event for ${clientId}, label: ${event.channel.label}`);
+        this.handleDataChannelEvent(event, clientId);
       };
 
-      // Store the new connection without a data channel yet
+      // Store the new connection without data channels yet (they arrive via ondatachannel)
       connection = {
         peerConnection,
-        dataChannel: null,
+        reliableControlChannel: null,
+        streamingUpdatesChannel: null,
         connected: false,
       };
       this.connections.set(clientId, connection);
@@ -285,7 +292,7 @@ export class WebRTCService {
     const connection = this.connections.get(clientId);
     if (!connection) {
       this.callbacks.addLog(
-        `Received answer from ${clientId} but no connection exists`,
+        `[WebRTCService] Received answer from ${clientId} but no connection exists`,
       );
       return;
     }
@@ -314,7 +321,7 @@ export class WebRTCService {
     const connection = this.connections.get(clientId);
     if (!connection) {
       this.callbacks.addLog(
-        `Received ICE candidate from ${clientId} but no connection exists`,
+        `[WebRTCService] Received ICE candidate from ${clientId} but no connection exists`,
       );
       return;
     }
@@ -338,8 +345,13 @@ export class WebRTCService {
       return;
     }
 
-    if (connection.dataChannel) {
-      connection.dataChannel.close();
+    if (connection.reliableControlChannel) {
+      this.callbacks.addLog(`[WebRTCService] Closing reliable_control channel for ${clientId}`);
+      connection.reliableControlChannel.close();
+    }
+    if (connection.streamingUpdatesChannel) {
+      this.callbacks.addLog(`[WebRTCService] Closing streaming_updates channel for ${clientId}`);
+      connection.streamingUpdatesChannel.close();
     }
     connection.peerConnection.close();
     this.removeConnection(clientId);
@@ -352,124 +364,98 @@ export class WebRTCService {
     this.callbacks.onClientRemoved(clientId);
   }
 
+  // Helper to manage data channel events, used by both initRTC and handleClientOffer
+  private handleDataChannelEvent(event: RTCDataChannelEvent, clientId: string): void {
+    const dataChannel = event.channel;
+    this.callbacks.addLog(`[WebRTCService] Data channel [${dataChannel.label}] received for ${clientId}. Ordered: ${dataChannel.ordered}, MaxRetransmits: ${dataChannel.maxRetransmits}`);
+    
+    const connection = this.connections.get(clientId);
+    if (!connection) {
+      this.callbacks.addLog(`[WebRTCService] No connection found for ${clientId} when handling data channel event.`);
+      return;
+    }
+
+    if (dataChannel.label === "reliable_control") {
+      connection.reliableControlChannel = dataChannel;
+    } else if (dataChannel.label === "streaming_updates") {
+      connection.streamingUpdatesChannel = dataChannel;
+    } else {
+      this.callbacks.addLog(`[WebRTCService] Received data channel with unknown label: ${dataChannel.label}`);
+      // Optionally close it if it's unexpected: dataChannel.close();
+      return;
+    }
+    this.connections.set(clientId, connection);
+    this.setupDataChannelEvents(dataChannel, clientId);
+  }
+
   sendMessageToClient(
     clientId: string,
     message: unknown,
+    channelLabel: "reliable_control" | "streaming_updates" = "reliable_control",
   ): boolean {
     const connection = this.connections.get(clientId);
-    if (
-      !connection || !connection.dataChannel ||
-      connection.dataChannel.readyState !== "open"
-    ) {
+    if (!connection) {
+      this.callbacks.addLog(`[WebRTCService] sendMessageToClient: No connection for ${clientId}`);
+      return false;
+    }
+
+    let channelToUse: RTCDataChannel | null = null;
+    if (channelLabel === "reliable_control") {
+      channelToUse = connection.reliableControlChannel;
+    } else {
+      channelToUse = connection.streamingUpdatesChannel;
+    }
+
+    if (!channelToUse || channelToUse.readyState !== "open") {
+      this.callbacks.addLog(`[WebRTCService] sendMessageToClient: Channel [${channelLabel}] for ${clientId} not open. State: ${channelToUse?.readyState}`);
       return false;
     }
 
     try {
-      connection.dataChannel.send(
+      channelToUse.send(
         typeof message === "string" ? message : JSON.stringify(message),
       );
       return true;
     } catch (error) {
-      console.error(`Error sending message to ${clientId}:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[WebRTCService] Error sending message to ${clientId} on [${channelLabel}]:`, error);
+      this.callbacks.addLog(`Error sending message to client ${clientId}: ${errorMessage}`);
       return false;
     }
   }
 
-  broadcastMessage(message: unknown): Map<string, boolean> {
+  broadcastMessage(
+    message: unknown,
+    channelLabel: "reliable_control" | "streaming_updates" = "reliable_control",
+    ): Map<string, boolean> {
     const results = new Map<string, boolean>();
 
     for (const [clientId, connection] of this.connections.entries()) {
-      if (
-        connection.dataChannel && connection.dataChannel.readyState === "open"
-      ) {
+      let channelToUse: RTCDataChannel | null = null;
+      if (channelLabel === "reliable_control") {
+        channelToUse = connection.reliableControlChannel;
+      } else {
+        channelToUse = connection.streamingUpdatesChannel;
+      }
+
+      if (channelToUse && channelToUse.readyState === "open") {
         try {
-          connection.dataChannel.send(
+          channelToUse.send(
             typeof message === "string" ? message : JSON.stringify(message),
           );
           results.set(clientId, true);
         } catch (error) {
-          console.error(`Error broadcasting to ${clientId}:`, error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`[WebRTCService] Error broadcasting to ${clientId} on [${channelLabel}]:`, error);
+          this.callbacks.addLog(`Error broadcasting to client ${clientId}: ${errorMessage}`);
           results.set(clientId, false);
         }
       } else {
         results.set(clientId, false);
       }
     }
-
     return results;
   }
 
-  startPing(intervalMs: number = 5000): void {
-    this.stopPing();
 
-    this.pingInterval = setInterval(() => {
-      const clientIds = Array.from(this.connections.keys());
-      clientIds.forEach(this.pingClient.bind(this));
-    }, intervalMs) as unknown as number;
-
-    this.callbacks.addLog(`Started WebRTC ping at ${intervalMs}ms intervals`);
-  }
-
-  stopPing(): void {
-    if (this.pingInterval !== null) {
-      clearInterval(this.pingInterval);
-      this.pingInterval = null;
-      this.callbacks.addLog("Stopped WebRTC ping");
-    }
-  }
-
-  async pingClient(clientId: string): Promise<PingResult> {
-    const connection = this.connections.get(clientId);
-    if (
-      !connection || !connection.dataChannel ||
-      connection.dataChannel.readyState !== "open"
-    ) {
-      return { clientId, latency: -1, success: false };
-    }
-
-    // Use a timestamp for ping measurement
-    const timestamp = Date.now();
-    const pingMessage = {
-      type: "ping",
-      timestamp,
-    };
-
-    // Create a promise that will resolve when we get a pong back
-    const pingPromise = new Promise<PingResult>((resolve) => {
-      // Add a one-time message handler for this specific ping
-      const onPongReceived = (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "pong" && data.timestamp === timestamp) {
-            const latency = Date.now() - timestamp;
-            // Remove the one-time listener
-            connection.dataChannel?.removeEventListener(
-              "message",
-              onPongReceived,
-            );
-            resolve({ clientId, latency, success: true });
-          }
-        } catch (_error) {
-          // Ignore parsing errors, we'll just wait for the correct message
-        }
-      };
-
-      // Add the listener
-      connection.dataChannel?.addEventListener("message", onPongReceived);
-
-      // Set a timeout to resolve with failure after 5 seconds
-      setTimeout(() => {
-        connection.dataChannel?.removeEventListener("message", onPongReceived);
-        resolve({ clientId, latency: -1, success: false });
-      }, 5000);
-    });
-
-    try {
-      connection.dataChannel.send(JSON.stringify(pingMessage));
-      return await pingPromise;
-    } catch (_error) {
-      console.error(`Error pinging client ${clientId}:`, _error);
-      return { clientId, latency: -1, success: false };
-    }
-  }
 }

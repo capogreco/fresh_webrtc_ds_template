@@ -99,10 +99,18 @@ export function ClientList(props: ClientListProps) {
                 {client.latency !== undefined && (
                   <div class="client-latency">
                     {client.latency >= 0
-                      ? `Latency: ${client.latency}ms`
-                      : "No ping response"}
+                      ? `Latency: ${client.latency.toFixed(0)}ms ${client.staleLatency ? "(stale)" : ""}`
+                      : "Latency: N/A"}
                   </div>
                 )}
+                <div class="client-operating-mode">
+                  Mode: {currentMode} 
+                  {currentMode === ControllerMode.DEFAULT && client.connected && client.synthParams && (
+                    <span>
+                      {" "}(Status: {client.synthParams.oscillatorEnabled ? "Active" : "Standby"})
+                    </span>
+                  )}
+                </div>
               </div>
               <div class="client-actions">
                 {!client.connected
@@ -160,17 +168,7 @@ export function ClientList(props: ClientListProps) {
                   )}
               </div>
             )}
-            {/* For Default Mode, just show minimal status */}
-            {client.connected && client.synthParams &&
-              !shouldShowPerClientControls && (
-              <div class="client-minimal-status">
-                <p>Client is receiving global Default Mode parameters</p>
-                <p class="client-status-info">
-                  Status:{" "}
-                  {client.synthParams.oscillatorEnabled ? "Active" : "Standby"}
-                </p>
-              </div>
-            )}
+            {/* Default Mode status is now displayed in the client-info header */}
           </div>
         ))}
       </div>

@@ -154,7 +154,9 @@ export function useAudioEngine(
     if (audioEngineRef.current) {
       // This will work for both DEFAULT and IKEDA modes
       audioEngineRef.current.confirmVolumeCheckComplete();
-      addLog(`useAudioEngine: User confirmed volume check for ${activeControllerMode.value} mode.`);
+      addLog(
+        `useAudioEngine: User confirmed volume check for ${activeControllerMode.value} mode.`,
+      );
     }
   }, [activeControllerMode.value, addLog]);
 
