@@ -42,17 +42,15 @@ export function ClientList(props: ClientListProps) {
     props.onSynthParamChange;
   const clientsArray = Array.from(clients.entries());
 
-  // Default to SYNTH mode if not specified
-  const currentMode = props.currentOperatingMode || ControllerMode.SYNTH;
+  // Default to IKEDA mode if not specified
+  const currentMode = props.currentOperatingMode || ControllerMode.IKEDA;
 
   // Use the provided paramDescriptors or fall back to standard SYNTH_PARAMS
   const paramDescriptors = props.paramDescriptors || SYNTH_PARAMS;
 
   // Check if we should show the per-client controls
-  // (Don't show for Default Mode, only if we have descriptors for other modes)
-  const shouldShowPerClientControls = currentMode !== ControllerMode.DEFAULT &&
-    paramDescriptors &&
-    paramDescriptors.length > 0;
+  // Only show if we have descriptors
+  const shouldShowPerClientControls = paramDescriptors && paramDescriptors.length > 0;
 
   // Group parameters by their section prefix (for DEFAULT mode)
   const paramGroups = new Map<string, SynthParamDescriptor[]>();
@@ -103,9 +101,9 @@ export function ClientList(props: ClientListProps) {
                       : "Latency: N/A"}
                   </div>
                 )}
-                {/* Display client-specific status IF in DEFAULT mode */}
-                {currentMode === ControllerMode.DEFAULT && client.connected && client.synthParams && (
-                  <div class="client-default-mode-status">
+                {/* Display client oscillator status */}
+                {client.connected && client.synthParams && client.synthParams.oscillatorEnabled !== undefined && (
+                  <div class="client-oscillator-status">
                     Status: {client.synthParams.oscillatorEnabled ? "Active" : "Standby"}
                   </div>
                 )}
@@ -151,7 +149,7 @@ export function ClientList(props: ClientListProps) {
                           <h3 class="param-group-title">{groupName}</h3>
                           <SynthControls
                             idPrefix={`client_${clientId}`}
-                            params={client.synthParams}
+                            params={client.synthParams || {}}
                             onParamChange={(param, value) =>
                               onSynthParamChange(clientId, param, value)}
                             paramDescriptors={params}
@@ -164,10 +162,10 @@ export function ClientList(props: ClientListProps) {
                     // Standard SynthControls for simpler parameter sets
                     <SynthControls
                       idPrefix={`client_${clientId}`}
-                      params={client.synthParams}
+                      params={client.synthParams || {}}
                       onParamChange={(param, value) =>
                         onSynthParamChange(clientId, param, value)}
-                      paramDescriptors={paramDescriptors}
+                      paramDescriptors={[...paramDescriptors]}
                     />
                   )}
               </div>

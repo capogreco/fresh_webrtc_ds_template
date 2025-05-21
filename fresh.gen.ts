@@ -14,7 +14,6 @@ import * as $ctrl_dev from "./routes/ctrl/dev.tsx";
 import * as $ctrl_index from "./routes/ctrl/index.tsx";
 import * as $ctrl_logout from "./routes/ctrl/logout.tsx";
 import * as $index from "./routes/index.tsx";
-import * as $webrtc_default_mode_test from "./routes/webrtc/default-mode-test.tsx";
 import * as $Controller from "./islands/Controller.tsx";
 import * as $KickControllerButton from "./islands/KickControllerButton.tsx";
 import * as $Synth from "./islands/Synth.tsx";
@@ -22,7 +21,6 @@ import * as $WebRTC from "./islands/WebRTC.tsx";
 import * as $hooks_clientManagerStore from "./islands/hooks/clientManagerStore.ts";
 import * as $hooks_useAudioEngine from "./islands/hooks/useAudioEngine.ts";
 import * as $hooks_useClientManager from "./islands/hooks/useClientManager.ts";
-import * as $hooks_useWebRTCConnection from "./islands/hooks/useWebRTCConnection.ts";
 import * as $hooks_useWebSocketSignaling from "./islands/hooks/useWebSocketSignaling.ts";
 import type { Manifest } from "$fresh/server.ts";
 
@@ -40,7 +38,6 @@ const manifest = {
     "./routes/ctrl/index.tsx": $ctrl_index,
     "./routes/ctrl/logout.tsx": $ctrl_logout,
     "./routes/index.tsx": $index,
-    "./routes/webrtc/default-mode-test.tsx": $webrtc_default_mode_test,
   },
   islands: {
     "./islands/Controller.tsx": $Controller,
@@ -50,7 +47,6 @@ const manifest = {
     "./islands/hooks/clientManagerStore.ts": $hooks_clientManagerStore,
     "./islands/hooks/useAudioEngine.ts": $hooks_useAudioEngine,
     "./islands/hooks/useClientManager.ts": $hooks_useClientManager,
-    "./islands/hooks/useWebRTCConnection.ts": $hooks_useWebRTCConnection,
     "./islands/hooks/useWebSocketSignaling.ts": $hooks_useWebSocketSignaling,
   },
   baseUrl: import.meta.url,

@@ -9,8 +9,6 @@ import type { SynthClient } from "./types/client.ts";
 export interface ClientManagerContextValue {
   // Client state
   clients: Signal<Map<string, SynthClient>>;
-  connectedClientsCount: Signal<number>;
-  connectedClients: Signal<Map<string, SynthClient>>;
 
   // Client management methods
   addClient: (clientId: string) => void;
@@ -27,13 +25,7 @@ export interface ClientManagerContextValue {
 
   // Communication methods
   broadcastMessage: (message: string) => void;
-
-  // Connection management
-  startPinging: (intervalMs?: number) => void;
-  stopPinging: () => void;
-  pingClient: (
-    clientId: string,
-  ) => Promise<{ clientId: string; latency: number; success: boolean }>;
+  sendMessageToClient: (clientId: string, message: unknown, channelLabel?: "reliable_control" | "streaming_updates") => boolean;
 
   // WebRTC signaling handlers
   handleClientOffer: (
@@ -45,6 +37,11 @@ export interface ClientManagerContextValue {
   handleIceCandidateFromClient: (
     msg: { source: string; data: RTCIceCandidateInit; type: "ice-candidate" },
   ) => void;
+  
+  // Instrument parameters and streaming
+  setLiveParamsGetter: (getter: () => Record<string, unknown>) => void;
+  streamResolvedParameterUpdate: (clientId: string, parameterName: string, value: unknown) => void;
+  setMessageFromClientCallback: (callback: (clientId: string, messageString: string, channelLabel: string) => void) => void;
 }
 
 // Create the context with null as default value

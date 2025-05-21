@@ -1,6 +1,5 @@
 /// <reference lib="deno.unstable" />
-import type { Handlers } from "../../lib/types/fresh.ts";
-import { ulid as _ulid } from "../../lib/utils/ulid.ts";
+import type { Handlers } from "$fresh/server.ts";
 import {
   deliverQueuedMessages,
   MESSAGE_KEY_PREFIX as _MESSAGE_KEY_PREFIX,

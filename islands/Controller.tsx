@@ -69,6 +69,11 @@ export default function Controller({ user, clientId }: ControllerProps) {
         if (parsedMsg.type === "app_pong" && parsedMsg.original_timestamp !== undefined && channelLabel === "reliable_control") {
           const originalSentTime = pingSentTimesRef.current.get(clientId);
           
+          if (originalSentTime === undefined) {
+            console.warn(`[Controller AppPing] Pong from ${clientId} but originalSentTime is undefined.`);
+            return;
+          }
+          
           if (originalSentTime === parsedMsg.original_timestamp) {
             const rttMs = Date.now() - originalSentTime;
             const latencyMs = rttMs / 2;
@@ -76,8 +81,8 @@ export default function Controller({ user, clientId }: ControllerProps) {
             pingSentTimesRef.current.delete(clientId); 
 
             if (clientManagerInstanceRef.current && clientManagerInstanceRef.current.clients) {
-              const currentClientsMap = clientManagerInstanceRef.current.clients.value;
-              if (currentClientsMap.has(clientId)) {
+              const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
+              if (currentClientsMap?.has(clientId)) {
                 const newClientsMap = new Map(currentClientsMap);
                 const clientToUpdate = newClientsMap.get(clientId)!; 
                 
@@ -87,7 +92,9 @@ export default function Controller({ user, clientId }: ControllerProps) {
                   staleLatency: false, 
                 };
                 newClientsMap.set(clientId, updatedClient);
-                clientManagerInstanceRef.current.clients.value = newClientsMap; 
+                if (clientManagerInstanceRef.current) {
+                  clientManagerInstanceRef.current.clients.value = newClientsMap;
+                }
                 
                 // console.log(`[Controller AppPing] Latency for ${clientId}: ${latencyMs.toFixed(0)}ms (RTT: ${rttMs}ms)`);
               }
@@ -101,8 +108,8 @@ export default function Controller({ user, clientId }: ControllerProps) {
           // Handle stream_ack_pulse
           addLog(`[Controller] Received stream_ack_pulse from ${clientId} for original_ping_ts: ${parsedMsg.original_ping_ts}`);
           if (clientManagerInstanceRef.current && clientManagerInstanceRef.current.clients) {
-            const currentClientsMap = clientManagerInstanceRef.current.clients.value;
-            if (currentClientsMap.has(clientId)) {
+            const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
+            if (currentClientsMap?.has(clientId)) {
               const newClientsMap = new Map(currentClientsMap);
               const clientToUpdate = newClientsMap.get(clientId)!;
               
@@ -112,7 +119,9 @@ export default function Controller({ user, clientId }: ControllerProps) {
                 streamingChannelHealth: "active" as const,
               };
               newClientsMap.set(clientId, updatedClient);
-              clientManagerInstanceRef.current.clients.value = newClientsMap;
+              if (clientManagerInstanceRef.current) {
+                clientManagerInstanceRef.current.clients.value = newClientsMap;
+              }
               console.log(`[Controller StreamingHealth] Client ${clientId}: status set to 'active', lastSeen_ms_ago: ${Date.now() - updatedClient.lastStreamingAckPulseSeen}`);
             }
           }
@@ -378,7 +387,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
   const handleControllerKickedInternalLogic = useCallback(
     (newControllerId: string) => {
       addLog(`Controller kicked by ${newControllerId}`);
-      clientManagerInstanceRef.current?.stopPinging();
+      // stopPinging method removed from client manager
       if (clientManagerInstanceRef.current) {
         const clientIds = Array.from(
           clientManagerInstanceRef.current.clients.value.keys(),
@@ -511,9 +520,18 @@ export default function Controller({ user, clientId }: ControllerProps) {
     );
   }, []);
 
+  // Create a typed wrapper for wsSignal to satisfy the useClientManager interface
+  const wsSignalForManager = useMemo(() => ({
+    sendMessage: (message: unknown) => { 
+      // wsSignal.sendMessage expects WebSocketMessage but WebRTCService passes unknown
+      // This wrapper handles the type conversion safely
+      wsSignal.sendMessage(message as WebSocketMessage);
+    },
+  }), [wsSignal]);
+
   const _clientManagerFromHook = useClientManager(
     id,
-    wsSignal, // Use the real wsSignal object from useWebSocketSignaling
+    wsSignalForManager, // Use the typed wrapper that matches the useClientManager interface
     // dummyAddLog, // No longer passing addLog to useClientManager
   );
   // End HANG_DEBUG log
@@ -704,13 +722,13 @@ export default function Controller({ user, clientId }: ControllerProps) {
         const clientIds = Array.from(clientManagerInstanceRef.current.clients.value.keys());
         
         clientIds.forEach(clientId => {
-          const client = clientManagerInstanceRef.current.clients.value.get(clientId);
+          const client = clientManagerInstanceRef.current?.clients.value.get(clientId);
           if (client && client.connected) { // Only ping connected clients
             const now = Date.now();
             pingSentTimesRef.current.set(clientId, now);
             
             const pingMsg = { type: "app_ping", timestamp: now };
-            const success = clientManagerInstanceRef.current.sendMessageToClient(
+            const success = clientManagerInstanceRef.current?.sendMessageToClient(
               clientId,
               JSON.stringify(pingMsg), // Ensure message is stringified
               "reliable_control"
@@ -733,20 +751,22 @@ export default function Controller({ user, clientId }: ControllerProps) {
                   initialHealth = "active";
               }
               // Check if current map version already has it from onMessageFromClient to avoid overwriting "active" with "unknown"
-              const currentClientInMap = clientManagerInstanceRef.current.clients.value.get(clientId);
+              const currentClientInMap = clientManagerInstanceRef.current?.clients.value.get(clientId);
               if (!currentClientInMap?.streamingChannelHealth) { // only update if not already set by onMessage
                 healthNeedsInit = true;
               }
 
               if (healthNeedsInit) {
                   console.log(`[Controller StreamingHealth] Client ${clientId}: initializing health to '${initialHealth}'`);
-                  const currentClientsMap = clientManagerInstanceRef.current.clients.value;
+                  const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
                   const newClientsMap = new Map(currentClientsMap);
                   const clientToUpdate = newClientsMap.get(clientId);
                   if (clientToUpdate) {
                       const updatedClientData = { ...clientToUpdate, streamingChannelHealth: initialHealth };
                       newClientsMap.set(clientId, updatedClientData);
-                      clientManagerInstanceRef.current.clients.value = newClientsMap;
+                      if (clientManagerInstanceRef.current) {
+                        clientManagerInstanceRef.current.clients.value = newClientsMap;
+                      }
                   }
               }
             }
@@ -774,14 +794,18 @@ export default function Controller({ user, clientId }: ControllerProps) {
             }
 
             if (healthNeedsUpdate) {
-              const currentClientsMap = clientManagerInstanceRef.current.clients.value;
-              const newClientsMap = new Map(currentClientsMap);
-              const clientToUpdate = newClientsMap.get(clientId); // Re-get to ensure it's the latest from the map
-              if (clientToUpdate) {
-                const updatedClientData = { ...clientToUpdate, streamingChannelHealth: newStreamingHealth };
-                newClientsMap.set(clientId, updatedClientData);
-                clientManagerInstanceRef.current.clients.value = newClientsMap;
-                console.log(`[Controller StreamingHealth] Client ${clientId}: status updated to '${newStreamingHealth}', lastSeen_ms_ago: ${clientToUpdate && clientToUpdate.lastStreamingAckPulseSeen ? Date.now() - clientToUpdate.lastStreamingAckPulseSeen : 'never'}`);
+              const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
+              if (currentClientsMap) {
+                const newClientsMap = new Map(currentClientsMap);
+                const clientToUpdate = newClientsMap.get(clientId); // Re-get to ensure it's the latest from the map
+                if (clientToUpdate) {
+                  const updatedClientData = { ...clientToUpdate, streamingChannelHealth: newStreamingHealth };
+                  newClientsMap.set(clientId, updatedClientData);
+                  if (clientManagerInstanceRef.current) {
+                    clientManagerInstanceRef.current.clients.value = newClientsMap;
+                  }
+                  console.log(`[Controller StreamingHealth] Client ${clientId}: status updated to '${newStreamingHealth}', lastSeen_ms_ago: ${clientToUpdate && clientToUpdate.lastStreamingAckPulseSeen ? Date.now() - clientToUpdate.lastStreamingAckPulseSeen : 'never'}`);
+                }
               }
             }
           }
@@ -836,7 +860,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
         style="margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px;"
       >
         <h2>Controller Status</h2>
-        <p>Current Operating Mode: <strong>{MODE_PARAMS_MAP.active === "IKEDA" ? "IKEDA" : "DEFAULT"}</strong></p>
+        <p>Current Operating Mode: <strong>IKEDA</strong></p>
         {/* Add additional global controls here */}
       </div>
 

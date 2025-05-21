@@ -10,7 +10,7 @@ export default defineConfig({
       const interfaces = Deno.networkInterfaces();
       let foundLocalIP = false;
       for (const iface of interfaces) {
-        if (iface.address && iface.family === "IPv4" && !iface.internal) {
+        if (iface.address && iface.family === "IPv4") {
           const isCommonPrivate = iface.address.startsWith("192.168.") || 
                                 iface.address.startsWith("10.") || 
                                 (iface.address.startsWith("172.") && parseInt(iface.address.split('.')[1], 10) >= 16 && parseInt(iface.address.split('.')[1], 10) <= 31);

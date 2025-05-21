@@ -15,12 +15,16 @@ export interface SynthClient {
   latency?: number;
   /** Whether the latency value is stale (ping failed but keeping previous value) */
   staleLatency?: boolean;
+  /** Current health status of the streaming updates channel */
+  streamingChannelHealth?: "active" | "stale" | "unknown";
+  /** Timestamp when the last streaming channel acknowledgment pulse was received */
+  lastStreamingAckPulseSeen?: number;
   /** Synthesizer parameters for audio configuration */
-  synthParams?: SynthParams;
+  synthParams?: Record<string, any>;
   /** Whether audio is muted on the client */
   isMuted?: boolean;
   /** Additional audio state info (running, suspended, etc.) */
-  audioState?: string;
+  audioState?: any;
   /** Whether a note is pending activation as soon as audio is enabled */
   pendingNote?: boolean;
   /** Whether the connection has been verified by direct ping/pong */

@@ -1,7 +1,9 @@
+export type SynthParamType = "number" | "enum" | "boolean" | "note" | "string";
+
 export interface SynthParamDescriptor {
   id: string; // Unique identifier, used for messaging and mapping
   label: string; // User-friendly label for UI
-  type: "number" | "enum" | "boolean" | "note"; // Type of parameter
+  type: SynthParamType; // Type of parameter
   min?: number; // Minimum value for 'number' type
   max?: number; // Maximum value for 'number' type
   step?: number; // Step value for 'number' type sliders/inputs

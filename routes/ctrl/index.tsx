@@ -1,6 +1,6 @@
 // Preact component
 import { h } from "preact";
-import type { Handlers, PageProps } from "../../lib/types/fresh.ts";
+import type { Handlers, PageProps, FreshContext } from "$fresh/server.ts";
 import Controller from "../../islands/Controller.tsx";
 import { getCookieValue } from "../../lib/utils/cookies.ts";
 import {
@@ -30,9 +30,7 @@ const ACTIVE_CTRL_CLIENT_ID = ["webrtc:active_ctrl_client"];
 export const handler: Handlers = {
   async GET(
     req: Request,
-    ctx: {
-      render: (data: unknown, options?: { headers?: Headers }) => Response;
-    },
+    ctx: FreshContext,
   ) {
     try {
       // Check URL for special parameters from kick controller redirect

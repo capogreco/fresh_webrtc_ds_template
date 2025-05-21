@@ -142,7 +142,7 @@ export class IkedaModeMVPEngine {
               );
             } catch (e) {
               this.logger(
-                `// DEBUG-AUDIO: Error starting PinkNoiseSource on resume: ${e.message}`,
+                `// DEBUG-AUDIO: Error starting PinkNoiseSource on resume: ${e instanceof Error ? e.message : String(e)}`,
               );
             }
           }
@@ -156,7 +156,7 @@ export class IkedaModeMVPEngine {
       }
     } catch (e) {
       this.logger(
-        `// DEBUG-AUDIO: ERROR starting PinkNoiseSource: ${e.message}`,
+        `// DEBUG-AUDIO: ERROR starting PinkNoiseSource: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
 
@@ -339,5 +339,10 @@ export class IkedaModeMVPEngine {
     if (this.pinkNoiseGain) this.pinkNoiseGain.disconnect();
     if (this.engineOutputGain) this.engineOutputGain.disconnect();
     this.logger("IkedaModeMVPEngine cleaned up.");
+  }
+  
+  public dispose(): void {
+    console.log("[IkedaModeMVPEngine] dispose() called");
+    this.cleanup();
   }
 }

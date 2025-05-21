@@ -16,7 +16,7 @@ interface SynthControlsProps {
 }
 
 export function SynthControls(
-  { idPrefix, params, onParamChange, paramDescriptors = SYNTH_PARAMS }:
+  { idPrefix, params, onParamChange, paramDescriptors = [...SYNTH_PARAMS] }:
     SynthControlsProps,
 ) {
   // Check if a parameter is a SIN format string

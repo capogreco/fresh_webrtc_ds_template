@@ -1,5 +1,5 @@
 /// <reference lib="deno.unstable" />
-import type { Handlers } from "../../../lib/types/fresh.ts";
+import type { Handlers } from "$fresh/server.ts";
 import { getCookieValue } from "../../../lib/utils/cookies.ts";
 
 // Open the KV store

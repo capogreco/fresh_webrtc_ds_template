@@ -163,7 +163,7 @@ export async function handleAuthRedirectsAndErrors(
   _req: Request,
   kv: Deno.Kv,
   ctx: {
-    render: (data: unknown, options?: { headers?: Headers }) => Response;
+    render: (data: unknown, options?: { headers?: Headers }) => Response | Promise<Response>;
   },
   options: {
     sessionId?: string | null;

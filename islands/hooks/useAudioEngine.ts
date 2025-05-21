@@ -45,9 +45,9 @@ export function useAudioEngine(
   // Volume check state
   const isVolumeCheckPending = useSignal(false);
 
-  // Controller mode state - default to standard DEFAULT mode if none provided
+  // Controller mode state - default to IKEDA mode if none provided
   const activeControllerMode = useSignal<ControllerMode>(
-    KNOWN_CONTROLLER_MODES.DEFAULT,
+    KNOWN_CONTROLLER_MODES.IKEDA,
   );
 
   // FFT data for visualizations

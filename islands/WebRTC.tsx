@@ -32,27 +32,13 @@ interface GlobalThisExtensions {
 // Type definitions for abstracted functionality
 type MessageHandler = (event: MessageEvent, channel: RTCDataChannel) => void;
 
-// Specific types for signaling messages
-interface BaseSignalMessage {
-  source: string;
-  target?: string; // Controller messages often include a target
-  type: "offer" | "answer" | "ice-candidate"; // Literal types for discriminated union
-}
-
-interface OfferMessage extends BaseSignalMessage {
-  type: "offer";
-  data: RTCSessionDescriptionInit;
-}
-
-interface AnswerMessage extends BaseSignalMessage {
-  type: "answer";
-  data: RTCSessionDescriptionInit;
-}
-
-interface IceCandidateMessage extends BaseSignalMessage {
-  type: "ice-candidate";
-  data: RTCIceCandidateInit | null; // Candidate can be null to signal end
-}
+// Import shared signaling message types
+import {
+  BaseSignalMessage,
+  OfferMessage,
+  AnswerMessage,
+  IceCandidateMessage
+} from "../lib/types/signalingMessages.ts";
 
 // Web Audio Synthesizer Nodes - now managed by useAudioEngine hook
 
@@ -79,7 +65,7 @@ export default function WebRTC() {
 
   // Controller mode state
   const controllerMode = useSignal<ControllerMode>(
-    KNOWN_CONTROLLER_MODES.DEFAULT,
+    KNOWN_CONTROLLER_MODES.IKEDA,
   );
 
   // UI control state

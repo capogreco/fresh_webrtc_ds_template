@@ -5,7 +5,8 @@ import {
   IceCandidateMessage,
   OfferMessage,
   SignalingMessage,
-} from "./useWebRTCConnection.ts";
+  BaseSignalMessage,
+} from "../../lib/types/signalingMessages.ts";
 
 // Types for messages
 export interface WebSocketMessage {

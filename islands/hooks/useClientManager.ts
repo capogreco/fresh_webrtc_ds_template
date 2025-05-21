@@ -15,7 +15,7 @@ import {
   ControllerMode,
   KNOWN_CONTROLLER_MODES,
 } from "../../shared/controllerModes.ts";
-import type { PingResult } from "../../services/webrtcService.ts";
+// PingResult type no longer used or exported from webrtcService.ts
 
 export function useClientManager(
   controllerId: Signal<string>, // This is Controller's `id` signal
