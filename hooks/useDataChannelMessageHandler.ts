@@ -1,6 +1,7 @@
 // fresh_webrtc_ds_template/hooks/useDataChannelMessageHandler.ts
 
 import type { AudioEngineControls, LoggerFn } from "./types.ts";
+import type { UseIkedaSynthStateReturn } from "./useIkedaSynthState.ts";
 
 /**
  * Defines callbacks for actions the message handler might need to trigger externally,
@@ -17,6 +18,11 @@ export interface UseDataChannelMessageHandlerReturn {
   handleDataMessage: (event: MessageEvent, channel: RTCDataChannel, prefix?: string) => void;
 }
 
+/**
+ * Type alias for the handleDataMessage function to allow easier import in other files
+ */
+export type DataMessageHandlerFn = (event: MessageEvent, channel: RTCDataChannel, prefix?: string) => void;
+
 // --------------------------------------------------------------------------------
 // Hook Implementation
 // --------------------------------------------------------------------------------
@@ -26,12 +32,14 @@ export interface UseDataChannelMessageHandlerReturn {
  * data channel messages from a Ctrl Client, based on the defined system specification.
  *
  * @param audioEngine - An instance conforming to AudioEngineControls, providing access to audio processing.
+ * @param ikedaSynthState - An instance of useIkedaSynthState hook return value for Ikeda synth state management.
  * @param addLog - A logging function.
  * @param callbacks - An object containing callback functions, primarily `sendDataToCtrl`.
  * @returns An object containing the `handleDataMessage` function.
  */
 export default function useDataChannelMessageHandler(
   audioEngine: AudioEngineControls,
+  ikedaSynthState: UseIkedaSynthStateReturn,
   addLog: LoggerFn,
   callbacks: ChannelOperationCallbacks,
 ): UseDataChannelMessageHandlerReturn {
@@ -70,7 +78,14 @@ export default function useDataChannelMessageHandler(
       switch (message.type) {
         case "set_active_instrument":
           if (typeof message.instrument_id === 'string') {
-            audioEngine.activateInstrument(message.instrument_id, message.initial_params);
+            // For Ikeda synth, initialize it through the dedicated hook
+            if (message.instrument_id === "ikeda_synth_v1") {
+              ikedaSynthState.initialize(message.initial_params);
+              audioEngine.activateInstrument(message.instrument_id, message.initial_params);
+            } else {
+              // Fallback to the regular audio engine for other instruments
+              audioEngine.activateInstrument(message.instrument_id, message.initial_params);
+            }
           } else {
             addLog(`${logPrefix} Invalid 'set_active_instrument': missing instrument_id. Data: ${rawDataForLog}`);
             callbacks.sendDataToCtrl(JSON.stringify({ type: "error_report", original_message_type: message.type, error_code: "invalid_payload", message: "Missing instrument_id for set_active_instrument" }));
@@ -80,7 +95,15 @@ export default function useDataChannelMessageHandler(
         case "synth_param":
           if (message.param && message.value !== undefined) {
             const applyTiming = message.apply_timing === "next_phasor_reset" ? "next_phasor_reset" : "immediate";
-            audioEngine.updateSynthParam(message.param, message.value, applyTiming);
+            
+            // Check if this is an Ikeda synth parameter
+            if (ikedaSynthState.isActivatedSignal.value && message.param.startsWith("parameters.") || message.param.startsWith("global_settings.")) {
+              // Use the Ikeda-specific handler with dot notation support
+              ikedaSynthState.handleSynthParamMessage(message.param, message.value, applyTiming);
+            } else {
+              // Fallback to the regular audio engine parameter update
+              audioEngine.updateSynthParam(message.param, message.value, applyTiming);
+            }
           } else {
             addLog(`${logPrefix} Invalid 'synth_param': missing param or value. Data: ${rawDataForLog}`);
             callbacks.sendDataToCtrl(JSON.stringify({ type: "error_report", original_message_type: message.type, error_code: "invalid_payload", message: "Missing param or value for synth_param" }));
@@ -90,10 +113,29 @@ export default function useDataChannelMessageHandler(
         case "synth_params_full":
           if (message.params && typeof message.params === 'object') {
             const applyTiming = message.apply_timing === "next_phasor_reset" ? "next_phasor_reset" : "immediate";
+            
+            // Separate Ikeda and non-Ikeda parameters
+            const ikedaParams: Record<string, any> = {};
+            const regularParams: Record<string, any> = {};
+            
             for (const [paramId, value] of Object.entries(message.params)) {
               if (value !== undefined) {
-                audioEngine.updateSynthParam(paramId, value, applyTiming);
+                if (ikedaSynthState.isActivatedSignal.value && (paramId.startsWith("parameters.") || paramId.startsWith("global_settings."))) {
+                  ikedaParams[paramId] = value;
+                } else {
+                  regularParams[paramId] = value;
+                }
               }
+            }
+            
+            // Process Ikeda parameters in bulk if there are any
+            if (Object.keys(ikedaParams).length > 0) {
+              ikedaSynthState.handleSynthParamsFullMessage(ikedaParams, applyTiming);
+            }
+            
+            // Process regular parameters individually (maintaining backward compatibility)
+            for (const [paramId, value] of Object.entries(regularParams)) {
+              audioEngine.updateSynthParam(paramId, value, applyTiming);
             }
           } else {
             addLog(`${logPrefix} Invalid 'synth_params_full': missing or non-object params. Data: ${rawDataForLog}`);
@@ -130,6 +172,9 @@ export default function useDataChannelMessageHandler(
         case "synchronise_phasors":
           audioEngine.synchronisePhasor();
           audioEngine.applyQueuedParamsNow();
+          
+          // Also apply any queued Ikeda parameters
+          ikedaSynthState.applyQueuedParameters();
           break;
 
         case "note_on":
@@ -187,16 +232,28 @@ export default function useDataChannelMessageHandler(
         case "request_current_resolved_state":
           addLog(`${logPrefix} Received 'request_current_resolved_state'. Constructing and sending report.`);
           if (typeof audioEngine.getCurrentResolvedState === 'function') {
-            const state = audioEngine.getCurrentResolvedState();
+            let stateReport: {
+              params: Record<string, any>;
+              globalSettings: Record<string, any>;
+              dynamicInternalState: Record<string, any> | null;
+            };
+            
+            // Use Ikeda-specific state if active
+            if (ikedaSynthState.isActivatedSignal.value) {
+              stateReport = ikedaSynthState.getResolvedState();
+            } else {
+              stateReport = audioEngine.getCurrentResolvedState();
+            }
+            
             callbacks.sendDataToCtrl(JSON.stringify({
               type: "current_resolved_state_report",
               active_instrument_id: audioEngine.activeInstrumentIdSignal.value || "unknown",
               is_playing: audioEngine.isPlayingSignal.value,
               is_globally_muted: audioEngine.isGloballyMutedSignal.value,
               audio_context_state: audioEngine.audioContextStateSignal.value,
-              params: state.params,
-              global_settings: state.globalSettings,
-              dynamic_internal_state: state.dynamicInternalState
+              params: stateReport.params,
+              global_settings: stateReport.globalSettings,
+              dynamic_internal_state: stateReport.dynamicInternalState
             }));
           } else {
             const errorMsg = "audioEngine does not implement getCurrentResolvedState. Cannot send report.";

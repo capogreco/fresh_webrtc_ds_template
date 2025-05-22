@@ -1,64 +1,94 @@
-// fresh_webrtc_ds_template/hooks/types.ts
-
-import type { Signal } from "@preact/signals";
+// hooks/types.ts
+import { Signal } from "@preact/signals";
+import type { IkedaSynthState } from "../types/instruments/ikeda_synth_types.ts";
 
 /**
- * Defines the controls and state signals expected from the AudioEngine.
- * This interface dictates how hooks like useDataChannelMessageHandler
- * interact with the audio processing core.
+ * Logger function type used in hooks for consistent logging
+ */
+export type LoggerFn = (message: string, level?: "info" | "warn" | "error") => void;
+
+/**
+ * Interface defining the minimal requirements for the AudioEngine used in hook returns
  */
 export interface AudioEngineControls {
-  // Instrument Activation & Parameter Handling
-  activateInstrument: (instrumentId: string, initialParams?: Record<string, any>) => void;
-  updateSynthParam: (paramId: string, value: any, applyTiming: "immediate" | "next_phasor_reset") => void;
-  applyQueuedParamsNow: () => void; // Called after phasor sync to apply queued param changes
-
-  // Transport and Timing Control
-  playPhasor: () => void;
-  stopPhasor: () => void;
-  setTempo: (cpm: number) => void;
-  synchronisePhasor: () => void;
-
-  // Discrete Note Handling (behavior is instrument-dependent)
-  handleExternalNoteOn: (data: { target_synth_id?: string; note_id?: string; pitch: number; velocity?: number }) => void;
-  handleExternalNoteOff: (data: { target_synth_id?: string; note_id?: string; pitch?: number }) => void;
-
-  // State Management (Local Banks on Synth Client)
-  saveStateToBank: (bankIndex: number) => { success: boolean; instrumentId?: string };
-  loadStateFromBank: (bankIndex: number) => { success: boolean; instrumentId?: string; error?: string };
-
-  // Instrument-Specific Commands
-  executeInstrumentCommand: (name: string, args?: any) => void;
-
-  // Global Behavior Modifiers
-  setParameterPortamento: (durationMs: number, curve?: string) => void;
-
-  // State Signals (primarily for constructing current_resolved_state_report)
-  activeInstrumentIdSignal: Signal<string | null>;
-  isPlayingSignal: Signal<boolean>;
+  // Basic audio context information
+  audioContextSignal: Signal<AudioContext | null>;
+  audioContextStateSignal: Signal<"running" | "suspended" | "closed" | "interrupted" | null>;
   isGloballyMutedSignal: Signal<boolean>;
-  audioContextStateSignal: Signal<"running" | "suspended" | "closed" | "interrupted">;
-
-  // Method to get current state for reporting
-  getCurrentResolvedState: () => {
-    params: Record<string, any>;
-    globalSettings: Record<string, any>;
-    dynamicInternalState?: Record<string, any>;
-  };
+  
+  // Instrument status
+  activeInstrumentIdSignal: Signal<string | null>;
+  isProgramRunningSignal: Signal<boolean>;
+  isPlayingSignal: Signal<boolean>;
+  
+  // Audio visualization data
+  fftData: Signal<Uint8Array | null>;
+  
+  // Volume check state
+  isVolumeCheckActiveSignal: Signal<boolean>;
+  isVolumeCheckCompletedSignal: Signal<boolean>;
+  
+  // Ikeda synth specific state
+  ikedaSynthStateSignal: Signal<IkedaSynthState | null>;
 }
 
 /**
- * Type definition for the logging function passed into various hooks.
- */
-export type LoggerFn = (text: string) => void;
-
-// Add other hook-related shared types here in the future if needed.
-
-/**
- * Extended interface for useAudioEngine return type that includes UI-specific methods
- * This extends AudioEngineControls with additional methods needed by UI components
+ * Interface for the return value of useAudioEngine hook
  */
 export interface UseAudioEngineReturn extends AudioEngineControls {
-  // Methods not part of the core AudioEngineControls interface but needed by UI
+  // Audio initialization
   initializeAudio: () => Promise<void>;
+  resumeAudio: () => Promise<void>;
+  suspendAudio: () => Promise<void>;
+  
+  // Volume check
+  confirmVolumeSetAndPrepare: () => void;
+  
+  // Instrument activation
+  activateInstrument: (instrumentId: string, initialParams?: Record<string, any>) => void;
+  
+  // Parameter updates
+  updateSynthParam: (
+    param: string,
+    value: any,
+    applyTiming?: "immediate" | "next_phasor_reset"
+  ) => void;
+  
+  // Ikeda-specific parameter update with dot notation support
+  updateIkedaParameter: (paramPath: string, value: any, applyTiming?: "immediate" | "next_phasor_reset") => void;
+  
+  // Program control
+  playPhasor: () => void;
+  stopPhasor: () => void;
+  synchronisePhasor: () => void;
+  applyQueuedParamsNow: () => void;
+  
+  // Tempo control
+  setTempo: (cpm: number) => void;
+  
+  // Parameter portamento
+  setParameterPortamento: (durationMs: number, curve?: string) => void;
+  
+  // Note control
+  handleExternalNoteOn: (message: { pitch: number; velocity?: number; note_id?: string }) => void;
+  handleExternalNoteOff: (message: { pitch?: number; note_id?: string }) => void;
+  
+  // Instrument commands
+  executeInstrumentCommand: (name: string, args?: any) => void;
+  
+  // State management
+  saveStateToBank: (bankIndex: number) => {
+    success: boolean;
+    instrumentId: string | null;
+  };
+  loadStateFromBank: (bankIndex: number) => {
+    success: boolean;
+    error?: string;
+    instrumentId: string | null;
+  };
+  getCurrentResolvedState: () => {
+    params: Record<string, any>;
+    globalSettings: Record<string, any>;
+    dynamicInternalState: Record<string, any> | null;
+  };
 }

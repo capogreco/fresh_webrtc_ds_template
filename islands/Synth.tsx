@@ -1,20 +1,22 @@
 import { h } from "preact";
 import { useEffect, useRef } from "preact/hooks";
-import { type UseAudioEngineReturn } from "./hooks/useAudioEngine.ts";
+import { type UseAudioEngineReturn } from "../hooks/types.ts";
+import { type UseIkedaSynthStateReturn } from "../hooks/useIkedaSynthState.ts";
 
 // Define props for the Synth island with specific audio engine type
 interface SynthProps {
   audio: UseAudioEngineReturn;
+  ikedaSynth: UseIkedaSynthStateReturn | null;
 }
 
-export default function Synth({ audio }: SynthProps) {
+export default function Synth({ audio, ikedaSynth }: SynthProps) {
   // FFT Analyzer Canvas Ref
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Update FFT visualization colors based on audio activity
   const getFftColors = () => {
     // Base colors
-    if (!audio.audioContextReady.value) {
+    if (audio.audioContextStateSignal.value !== 'running') {
       return {
         background: "#f5f5f5",
         border: "#ddd",
@@ -23,10 +25,10 @@ export default function Synth({ audio }: SynthProps) {
       };
     }
 
-    // Audio ready, check if note is active
-    if (audio.isNoteActive.value) {
+    // Audio ready, check if program is active
+    if (audio.isProgramRunningSignal.value) { // Use isProgramRunningSignal for general activity
       return {
-        background: "#f0f8ff", // Light blue background when note is playing
+        background: "#f0f8ff", // Light blue background when program is active
         border: "#4682b4", // Steel blue border
         bars: "#4169e1", // Royal blue bars
         text: "#333333",
@@ -56,7 +58,7 @@ export default function Synth({ audio }: SynthProps) {
 
     // Check if audio is ready and FFT data is available
     if (
-      !audio.audioContextReady.value || !audio.fftData.value ||
+      audio.audioContextStateSignal.value !== 'running' || !audio.fftData.value ||
       audio.fftData.value.length === 0
     ) {
       // Clear canvas if audio not ready, no FFT data, or FFT data array is empty
@@ -99,8 +101,8 @@ export default function Synth({ audio }: SynthProps) {
       if (barHeight < 2 && barHeight > 0) barHeight = 2;
 
       // Slight variation in color based on frequency bin
-      if (audio.isNoteActive.value) {
-        // When a note is playing, use a more vibrant gradient
+      if (audio.isProgramRunningSignal.value) { // Use isProgramRunningSignal
+        // When the program is active, use a more vibrant gradient
         const hue = 210 + (i / bufferLength * 30); // Range from 210 to 240 (blue spectrum)
         const saturation = 70 + Math.min(20, (dataArray[i] / 255.0) * 30);
         const lightness = 50 + Math.min(20, (1 - i / bufferLength) * 20);
@@ -113,8 +115,8 @@ export default function Synth({ audio }: SynthProps) {
     }
   }, [
     audio.fftData.value,
-    audio.audioContextReady.value,
-    audio.isNoteActive.value,
+    audio.audioContextStateSignal.value, // Corrected: Use audio context state signal
+    audio.isProgramRunningSignal.value,  // Updated to reflect program running state
     colors,
   ]); // Dependencies
 
@@ -126,7 +128,57 @@ export default function Synth({ audio }: SynthProps) {
         context.fillStyle = colors.bars;
       }
     }
-  }, [colors.bars, audio.isNoteActive.value]);
+  }, [colors.bars, audio.isProgramRunningSignal.value]);
+
+  // Extract Ikeda synth parameters for display
+  const getIkedaParameters = () => {
+    if (!ikedaSynth || !ikedaSynth.stateSignal.value) {
+      return null;
+    }
+
+    const state = ikedaSynth.stateSignal.value;
+    
+    // Extract pink noise level if available
+    let pinkNoiseLevel = null;
+    if (state.parameters && 
+        state.parameters.pink_noise_level && 
+        'value' in state.parameters.pink_noise_level) {
+      pinkNoiseLevel = state.parameters.pink_noise_level.value;
+    }
+    
+    // Extract pink noise active status if available
+    let pinkNoiseActive = null;
+    if (state.parameters && 
+        state.parameters.pink_noise_active && 
+        'value' in state.parameters.pink_noise_active) {
+      pinkNoiseActive = state.parameters.pink_noise_active.value;
+    }
+    
+    // Get tempo from global settings if available
+    let tempoCpm = null;
+    if (state.global_settings && 
+        state.global_settings.tempo_cpm && 
+        'value' in state.global_settings.tempo_cpm) {
+      tempoCpm = state.global_settings.tempo_cpm.value;
+    }
+    
+    // Get global active state if available
+    let globalActive = null;
+    if (state.global_settings && 
+        state.global_settings.active && 
+        'value' in state.global_settings.active) {
+      globalActive = state.global_settings.active.value;
+    }
+    
+    return {
+      pinkNoiseLevel,
+      pinkNoiseActive,
+      tempoCpm,
+      globalActive
+    };
+  };
+  
+  const ikedaParams = getIkedaParameters();
 
   return (
     <div class="synth-island-wrapper" style="max-width: 800px; margin: 0 auto;">
@@ -173,213 +225,189 @@ export default function Synth({ audio }: SynthProps) {
         style="margin: 20px auto; max-width: 650px; background-color: white; border-radius: 10px; border: 1px solid #ddd; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);"
       >
         <div class="synth-info">
-          <h3 style="margin-top: 0; color: #444; font-size: 1.2rem; text-align: center; margin-bottom: 15px;">
-            Synth Parameters
-          </h3>
-          <div
-            class="param-display"
-            style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;"
-          >
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Note Status
+          {audio.isVolumeCheckActiveSignal.value ? (
+            <div style="text-align: center;">
+              <h3 style="margin-top: 0; color: #444; font-size: 1.2rem; margin-bottom: 15px;">
+                Volume Calibration
+              </h3>
+              <p style="color: #555; margin-bottom: 20px;">
+                A steady sound is playing. Please adjust your system/headphone volume to a comfortable level.
+              </p>
+              <div style="margin-bottom: 20px; padding: 8px; border-radius: 6px; background-color: #f0f0f0; display: inline-block;">
+                <div style="font-weight: 500; color: #555; margin-bottom: 4px; font-size: 0.9em;">
+                  Active Sound Context
+                </div>
+                <div style="font-weight: bold; font-size: 1em; color: #337ab7;">
+                  {audio.activeInstrumentIdSignal.value || "Initializing..."} (Pink Noise Layer)
+                </div>
               </div>
-              <div
-                class="param-value"
-                style={`font-weight: bold; font-size: 1.1em; color: ${
-                  audio.isNoteActive.value ? "#2e8b57" : "#777"
-                };`}
+              <br />
+              <button
+                onClick={() => audio.confirmVolumeSetAndPrepare()}
+                style="padding: 10px 20px; font-size: 1rem; color: white; background-color: #5cb85c; border: none; border-radius: 5px; cursor: pointer; transition: background-color 0.2s ease;"
+                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#4cae4c')}
+                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#5cb85c')}
               >
-                {audio.isNoteActive.value ? "PLAYING" : "OFF"}
-              </div>
+                Continue
+              </button>
             </div>
+          ) : (
+            <>
+              <h3 style="margin-top: 0; color: #444; font-size: 1.2rem; text-align: center; margin-bottom: 15px;">
+                Synth Status & Controls
+              </h3>
+              <div
+                class="param-display"
+                style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;"
+              >
+                <div
+                  class="param-item"
+                  style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
+                >
+                  <div
+                    class="param-label"
+                    style="font-weight: 500; color: #555; margin-bottom: 4px;"
+                  >
+                    Program Status
+                  </div>
+                  <div
+                    class="param-value"
+                    style={`font-weight: bold; font-size: 1.1em; color: ${
+                      audio.isProgramRunningSignal.value ? "#2e8b57" : "#777"
+                    };`}
+                  >
+                    {audio.isProgramRunningSignal.value ? "ACTIVE" : "IDLE"}
+                  </div>
+                </div>
+                <div
+                  class="param-item"
+                  style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
+                >
+                  <div
+                    class="param-label"
+                    style="font-weight: 500; color: #555; margin-bottom: 4px;"
+                  >
+                    Current Instrument
+                  </div>
+                  <div
+                    class="param-value"
+                    style="font-weight: bold; font-size: 1.1em; color: #337ab7;"
+                  >
+                    {audio.activeInstrumentIdSignal.value || "N/A"}
+                  </div>
+                </div>
+                
+                {/* Display Ikeda synth parameters if available */}
+                {ikedaSynth && ikedaParams && (
+                  <>
+                    <div
+                      class="param-item"
+                      style="padding: 8px; border-radius: 6px; background-color: #f3f9ff;"
+                    >
+                      <div
+                        class="param-label"
+                        style="font-weight: 500; color: #555; margin-bottom: 4px;"
+                      >
+                        Ikeda Global Status
+                      </div>
+                      <div
+                        class="param-value"
+                        style={`font-weight: bold; font-size: 1.1em; color: ${
+                          ikedaParams.globalActive ? "#2e8b57" : "#777"
+                        };`}
+                      >
+                        {ikedaParams.globalActive ? "ACTIVE" : "INACTIVE"}
+                      </div>
+                    </div>
+                    
+                    {ikedaParams.tempoCpm !== null && (
+                      <div
+                        class="param-item"
+                        style="padding: 8px; border-radius: 6px; background-color: #f3f9ff;"
+                      >
+                        <div
+                          class="param-label"
+                          style="font-weight: 500; color: #555; margin-bottom: 4px;"
+                        >
+                          Tempo (CPM)
+                        </div>
+                        <div
+                          class="param-value"
+                          style="font-weight: bold; font-size: 1.1em; color: #337ab7;"
+                        >
+                          {ikedaParams.tempoCpm}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {ikedaParams.pinkNoiseActive !== null && (
+                      <div
+                        class="param-item"
+                        style="padding: 8px; border-radius: 6px; background-color: #f3f9ff;"
+                      >
+                        <div
+                          class="param-label"
+                          style="font-weight: 500; color: #555; margin-bottom: 4px;"
+                        >
+                          Pink Noise
+                        </div>
+                        <div
+                          class="param-value"
+                          style={`font-weight: bold; font-size: 1.1em; color: ${
+                            ikedaParams.pinkNoiseActive ? "#2e8b57" : "#777"
+                          };`}
+                        >
+                          {ikedaParams.pinkNoiseActive ? "ON" : "OFF"}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {ikedaParams.pinkNoiseLevel !== null && (
+                      <div
+                        class="param-item"
+                        style="padding: 8px; border-radius: 6px; background-color: #f3f9ff;"
+                      >
+                        <div
+                          class="param-label"
+                          style="font-weight: 500; color: #555; margin-bottom: 4px;"
+                        >
+                          Pink Noise Level
+                        </div>
+                        <div
+                          class="param-value"
+                          style="font-weight: bold; font-size: 1.1em; color: #337ab7;"
+                        >
+                          {typeof ikedaParams.pinkNoiseLevel === 'number' 
+                            ? `${(ikedaParams.pinkNoiseLevel * 100).toFixed(0)}%` 
+                            : ikedaParams.pinkNoiseLevel}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              {/* Controls for starting/stopping the program can be added here if desired in synth client UI */}
+              {/* For example:
+              <div style="text-align: center; margin-top: 20px;">
+                <button
+                  onClick={() => audio.startProgram()}
+                  disabled={audio.isProgramRunningSignal.value}
+                  style="padding: 10px 15px; margin-right: 10px; font-size: 1rem; background-color: #337ab7; color: white; border: none; border-radius: 5px; cursor: pointer;"
+                >
+                  Start Program
+                </button>
+                <button
+                  onClick={() => audio.stopProgram()}
+                  disabled={!audio.isProgramRunningSignal.value}
+                  style="padding: 10px 15px; font-size: 1rem; background-color: #d9534f; color: white; border: none; border-radius: 5px; cursor: pointer;"
+                >
+                  Stop Program
+                </button>
+              </div>
+              */}
+            </>
+          )}
 
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Pitch
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.currentNote.value || "—"}
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Waveform
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.waveform.value}
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Detune
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.detune.value > 0
-                  ? `+${audio.detune.value}`
-                  : audio.detune.value} ¢
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Volume
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {Math.round(audio.volume.value * 100)}%
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Attack
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.attack.value < 0.01
-                  ? `${Math.round(audio.attack.value * 1000)}ms`
-                  : `${audio.attack.value.toFixed(2)}s`}
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Release
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.release.value < 0.01
-                  ? `${Math.round(audio.release.value * 1000)}ms`
-                  : `${audio.release.value.toFixed(2)}s`}
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Filter
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.filterCutoff.value < 1000
-                  ? `${Math.round(audio.filterCutoff.value)}Hz`
-                  : `${(audio.filterCutoff.value / 1000).toFixed(1)}kHz`}{" "}
-                (Q:{audio.filterResonance.value.toFixed(1)})
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Vibrato
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.vibratoRate.value.toFixed(1)}Hz,{" "}
-                {Math.round(audio.vibratoWidth.value)}¢
-              </div>
-            </div>
-
-            <div
-              class="param-item"
-              style="padding: 8px; border-radius: 6px; background-color: #f8f8f8;"
-            >
-              <div
-                class="param-label"
-                style="font-weight: 500; color: #555; margin-bottom: 4px;"
-              >
-                Portamento
-              </div>
-              <div
-                class="param-value"
-                style="font-weight: bold; font-size: 1.1em; color: #446688;"
-              >
-                {audio.portamentoTime.value === 0
-                  ? "Off"
-                  : `${audio.portamentoTime.value.toFixed(2)}s`}
-              </div>
-            </div>
-          </div>
-          <p
-            class="control-info"
-            style="text-align: center; margin-top: 15px; color: #888; font-style: italic; font-size: 0.9em;"
-          >
-            Synth controls available in controller interface
-          </p>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { Signal, useSignal } from "@preact/signals";
 import { useEffect, useCallback, useRef } from "preact/hooks";
 import type { AudioEngineControls, LoggerFn } from "./types.ts"; // Assuming types.ts is in the same directory
+import type { IkedaSynthState } from "../types/instruments/ikeda_synth_types.ts";
 
 const DEFAULT_TEMPO_CPM = 60; // Will be used in later parts for phasor logic
 
@@ -62,6 +63,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
 
   // === State for Volume Check ===
   const isVolumeCheckActiveSignal = useSignal<boolean>(true); // Start in volume check mode
+  const isVolumeCheckCompletedSignal = useSignal<boolean>(false); // Track if volume check has been completed
 
   // === Visualization State (Placeholder) ===
   const fftData = useSignal<Uint8Array | null>(null); // FFT data for visualization
@@ -69,6 +71,8 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
   // === Active Instrument & Program State ===
   const activeInstrumentIdSignal = useSignal<string | null>(null);
   const isProgramRunningSignal = useSignal<boolean>(false); // True if main generative program/sequence is active
+  const isPlayingSignal = useSignal<boolean>(false); // True if the synth is actively playing
+  const ikedaSynthStateSignal = useSignal<IkedaSynthState | null>(null); // Ikeda synth state
 
   // === Tempo State ===
   const currentTempoSignal = useSignal<number>(DEFAULT_TEMPO_CPM);
@@ -255,6 +259,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
               // Volume check configuration complete
               coreAudioNodesSetupComplete.current = true; // Mark core node setup as complete for this AC
               isVolumeCheckActiveSignal.value = true; // Volume check is active
+              isVolumeCheckCompletedSignal.value = false; // Reset completed flag
               isProgramRunningSignal.value = false; // Explicitly ensure program is not marked as running
               activeInstrumentIdSignal.value = "ikeda_synth_v1"; // Default to Ikeda for volume check context
             } else {
@@ -300,14 +305,16 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
     audioContextStateSignal,
     isProgramRunningSignal,
     isVolumeCheckActiveSignal,
+    isVolumeCheckCompletedSignal,
     activeInstrumentIdSignal,
-  ]); // Added activeInstrumentIdSignal
+  ]); // Added activeInstrumentIdSignal and isVolumeCheckCompletedSignal
 
   // This function will be called when user confirms volume setting
   const confirmVolumeSetAndPrepare = useCallback(() => {
     if (lfoNodeRef.current && audioContextSignal.value?.state === "running") {
       // Volume confirmation received
       isVolumeCheckActiveSignal.value = false;
+      isVolumeCheckCompletedSignal.value = true;
 
       const lfoNode = lfoNodeRef.current;
       const acTime = audioContextSignal.value.currentTime;
@@ -357,6 +364,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
     audioContextSignal,
     lfoNodeRef,
     isVolumeCheckActiveSignal,
+    isVolumeCheckCompletedSignal,
     isProgramRunningSignal,
   ]);
 
@@ -414,6 +422,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
     }
 
     isProgramRunningSignal.value = true;
+    isPlayingSignal.value = true;
     log(
       `ikeda_synth program started. Pink Noise LFO active: Rate: ${ikedaLfoRate}Hz, AmpFactor: ${ikedaPinkNoiseVolume}`,
     );
@@ -425,6 +434,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
     audioContextSignal,
     lfoNodeRef,
     isProgramRunningSignal,
+    isPlayingSignal,
     isVolumeCheckActiveSignal,
   ]);
 
@@ -446,9 +456,10 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
       log("Pink noise gain set to 0 for program stop.");
     }
     isProgramRunningSignal.value = false;
+    isPlayingSignal.value = false;
 
     // TODO: Deactivate/pause other ikeda_synth layers (blips, clicks).
-  }, [log, audioContextSignal, pinkNoiseGainNodeRef, isProgramRunningSignal]);
+  }, [log, audioContextSignal, pinkNoiseGainNodeRef, isProgramRunningSignal, isPlayingSignal]);
 
   useEffect(() => {
     if (
@@ -667,11 +678,28 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
   const activateInstrument = useCallback(
     (instrumentId: string, initialParams?: Record<string, any>) => {
       log(
-        `STUB: activateInstrument: ${instrumentId}, initialParams: ${initialParams ? Object.keys(initialParams).join(", ") : "none"}`,
+        `activateInstrument: ${instrumentId}, initialParams: ${initialParams ? Object.keys(initialParams).join(", ") : "none"}`,
       );
       activeInstrumentIdSignal.value = instrumentId;
+      
+      // If we're activating Ikeda synth, initialize the AudioEngineService accordingly
+      if (instrumentId === "ikeda_synth_v1" && audioContextSignal.value) {
+        // Using type assertion to access the service's initializeIkedaMode method
+        const audioEngineService = audioContextSignal.value as any;
+        
+        if (audioEngineService.initializeIkedaMode) {
+          try {
+            audioEngineService.initializeIkedaMode(initialParams);
+            log(`Initialized Ikeda synth mode via AudioEngineService`);
+          } catch (error) {
+            log(`Error initializing Ikeda synth mode: ${error instanceof Error ? error.message : String(error)}`, "error");
+          }
+        } else {
+          log(`AudioEngineService does not have initializeIkedaMode method`, "error");
+        }
+      }
     },
-    [log, activeInstrumentIdSignal],
+    [log, activeInstrumentIdSignal, audioContextSignal],
   );
 
   const updateSynthParam = useCallback(
@@ -681,11 +709,53 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
       applyTiming: "immediate" | "next_phasor_reset",
     ) => {
       log(
-        `STUB: updateSynthParam: ${paramId} = ${String(value).substring(0, 50)}, timing: ${applyTiming}`,
+        `updateSynthParam: ${paramId} = ${String(value).substring(0, 50)}, timing: ${applyTiming}`,
       );
+      
+      // If we have an active Ikeda synth state, update its parameters
+      if (activeInstrumentIdSignal.value === "ikeda_synth_v1" && audioContextSignal.value) {
+        // Using type assertion to access the service's updateIkedaParameter method
+        const audioEngineService = audioContextSignal.value as any;
+        
+        if (audioEngineService.updateIkedaParameter) {
+          try {
+            // Convert flat paramId to dot notation path for Ikeda state
+            let paramPath: string;
+            
+            // Determine the appropriate path in the Ikeda state structure
+            if (paramId.startsWith('ikeda.') || paramId.includes('.')) {
+              // Already in dot notation format
+              paramPath = paramId;
+            } else if (paramId.startsWith('global_')) {
+              // Global settings
+              paramPath = `global_settings.${paramId.replace('global_', '')}.value`;
+            } else {
+              // Regular parameters
+              paramPath = `parameters.${paramId}.value`;
+            }
+            
+            audioEngineService.updateIkedaParameter(paramPath, value);
+            log(`Updated Ikeda synth parameter ${paramPath} via AudioEngineService`);
+          } catch (error) {
+            log(`Error updating Ikeda synth parameter: ${error instanceof Error ? error.message : String(error)}`, "error");
+          }
+        } else {
+          log(`AudioEngineService does not have updateIkedaParameter method`, "error");
+        }
+      }
     },
-    [log],
+    [log, activeInstrumentIdSignal, audioContextSignal],
   );
+
+  const playPhasor = useCallback(() => {
+    log(`playPhasor called (delegating to startProgram).`);
+    startProgram();
+  }, [log, startProgram]);
+
+  const stopPhasor = useCallback(() => {
+    log(`stopPhasor called (delegating to stopProgram).`);
+    stopProgram();
+  }, [log, stopProgram]);
 
   const applyQueuedParamsNow = useCallback(() => {
     log(`STUB: applyQueuedParamsNow called.`);
@@ -773,14 +843,71 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
     };
   }, [log]);
 
+  /**
+   * Update a parameter in the Ikeda synth state using dot notation path
+   */
+  const updateIkedaParameter = useCallback(
+    (paramPath: string, value: any, applyTiming: "immediate" | "next_phasor_reset" = "immediate") => {
+      log(`updateIkedaParameter: ${paramPath} = ${JSON.stringify(value)}`);
+      
+      // If we have an active Ikeda synth state, update it
+      if (activeInstrumentIdSignal.value === "ikeda_synth_v1" && audioContextSignal.value) {
+        // Using type assertion to access the service's updateIkedaParameter method
+        const audioEngineService = audioContextSignal.value as any;
+        
+        if (audioEngineService.updateIkedaParameter) {
+          try {
+            audioEngineService.updateIkedaParameter(paramPath, value);
+            log(`Updated Ikeda parameter ${paramPath} via AudioEngineService`);
+          } catch (error) {
+            log(`Error updating Ikeda parameter: ${error instanceof Error ? error.message : String(error)}`, "error");
+          }
+        } else {
+          log(`AudioEngineService does not have updateIkedaParameter method`, "error");
+        }
+      } else {
+        // If we don't have an active AudioEngineService, update the state directly
+        if (ikedaSynthStateSignal && ikedaSynthStateSignal.value) {
+          try {
+            // Split the path into parts
+            const parts = paramPath.split('.');
+            let current = {...ikedaSynthStateSignal.value};
+            
+            // Traverse to the second-to-last part
+            for (let i = 0; i < parts.length - 1; i++) {
+              const part = parts[i];
+              if (current[part] === undefined) {
+                current[part] = {};
+              }
+              current = current[part];
+            }
+            
+            // Set the value at the last part
+            const lastPart = parts[parts.length - 1];
+            current[lastPart] = value;
+            
+            // Update the signal with the new state
+            ikedaSynthStateSignal.value = {...ikedaSynthStateSignal.value};
+            log(`Updated Ikeda parameter ${paramPath} in local state`);
+          } catch (error) {
+            log(`Error updating Ikeda parameter in local state: ${error instanceof Error ? error.message : String(error)}`, "error");
+          }
+        } else {
+          log(`Cannot update Ikeda parameter: no active state`, "warn");
+        }
+      }
+    },
+    [log, activeInstrumentIdSignal, audioContextSignal, ikedaSynthStateSignal],
+  );
+  
   // === Return object for the hook ===
   return {
     // Methods directly from AudioEngineControls (implemented or stubbed)
     activateInstrument,
     updateSynthParam,
     applyQueuedParamsNow,
-    // playPhasor, // Renamed to startProgram
-    // stopPhasor, // Renamed to stopProgram
+    playPhasor,
+    stopPhasor,
     setTempo,
     synchronisePhasor,
     handleExternalNoteOn,
@@ -793,16 +920,21 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
 
     // Signals directly from AudioEngineControls
     activeInstrumentIdSignal,
-    isProgramRunningSignal, // Renamed
+    isProgramRunningSignal,
+    isPlayingSignal,
     isGloballyMutedSignal,
     audioContextStateSignal,
+    audioContextSignal,
     fftData,
-    isVolumeCheckActiveSignal, // Added
+    isVolumeCheckActiveSignal,
+    isVolumeCheckCompletedSignal,
+    ikedaSynthStateSignal,
 
     // Methods for UI interaction
-    confirmVolumeSetAndPrepare, // Added
-    startProgram, // Renamed
-    stopProgram, // Renamed
+    confirmVolumeSetAndPrepare,
+    startProgram,
+    stopProgram,
+    updateIkedaParameter,
 
     // Method specifically for UI to initialize audio context
     initializeAudio,
