@@ -1,6 +1,7 @@
 import { Signal } from "@preact/signals";
 import { WebSocketMessage } from "../islands/hooks/useWebSocketSignaling.ts";
 
+
 export interface ConnectionInfo {
   peerConnection: RTCPeerConnection;
   reliableControlChannel: RTCDataChannel | null;
@@ -116,11 +117,22 @@ export class WebRTCService {
   ): void {
     dataChannel.onopen = () => {
       this.callbacks.addLog(`[WebRTCService] Data channel [${dataChannel.label}] opened to ${clientId}`);
+      console.log(`[WebRTCService] Data channel "${dataChannel.label}" opened for client ${clientId}`);
+      
       const connection = this.connections.get(clientId);
       if (connection) {
         if (dataChannel.label === "reliable_control") {
           connection.connected = true; // Main connection status tied to reliable channel
           this.callbacks.onConnectionStateChange(clientId, true);
+          
+          // Send initial test message to verify the connection works
+          try {
+            const testMessage = JSON.stringify({ type: "connection_established", timestamp: Date.now() });
+            dataChannel.send(testMessage);
+            this.callbacks.addLog(`[WebRTCService] Sent test message on ${dataChannel.label} to ${clientId}`);
+          } catch (error) {
+            this.callbacks.addLog(`[WebRTCService] Failed to send test message: ${error}`);
+          }
         }
         // Always update the specific channel in connection info
         if (dataChannel.label === "reliable_control") connection.reliableControlChannel = dataChannel;
@@ -128,23 +140,44 @@ export class WebRTCService {
         
         this.connections.set(clientId, connection);
         this.callbacks.onDataChannelOpen(clientId, dataChannel); // Notify manager about this specific channel
+      } else {
+        this.callbacks.addLog(`[WebRTCService] Warning: Connection not found for ${clientId} when data channel opened`);
       }
     };
 
     dataChannel.onclose = () => {
+      console.log(`[WebRTCService] Data channel [${dataChannel.label}] closed to ${clientId}`);
       this.callbacks.addLog(`[WebRTCService] Data channel [${dataChannel.label}] closed to ${clientId}`);
+      
       const connection = this.connections.get(clientId);
       if (connection) {
         if (dataChannel.label === "reliable_control") {
           connection.connected = false;
           this.callbacks.onConnectionStateChange(clientId, false); // Overall connection lost
+          console.log(`[WebRTCService] Marked client ${clientId} as disconnected`);
+          this.callbacks.addLog(`[WebRTCService] WebRTC connection with ${clientId} has been lost`);
         }
-         // Clear the specific channel from connection info
+        // Clear the specific channel from connection info
         if (dataChannel.label === "reliable_control") connection.reliableControlChannel = null;
         else if (dataChannel.label === "streaming_updates") connection.streamingUpdatesChannel = null;
 
         this.connections.set(clientId, connection);
         this.callbacks.onDataChannelClose(clientId, dataChannel.label);
+        
+        // Schedule a reconnection attempt if this was the reliable channel
+        if (dataChannel.label === "reliable_control") {
+          console.log(`[WebRTCService] Will wait for client to reconnect: ${clientId}`);
+        }
+        
+        // Check if both channels are closed and peer connection is still open
+        // Consider cleaning up the entire connection if needed
+        if (!connection.reliableControlChannel && !connection.streamingUpdatesChannel) {
+          console.log(`[WebRTCService] All channels closed for ${clientId}`);
+          this.callbacks.addLog(`[WebRTCService] All channels closed for ${clientId}`);
+        }
+      } else {
+        console.warn(`[WebRTCService] Data channel closed but no connection found for ${clientId}`);
+        this.callbacks.addLog(`[WebRTCService] Warning: Connection not found for ${clientId} when data channel closed`);
       }
     };
 
@@ -221,13 +254,17 @@ export class WebRTCService {
   }
 
   async handleClientOffer(
-    msg: { source: string; data: RTCSessionDescriptionInit; type: "offer" },
+    msg: { source: string; data?: RTCSessionDescriptionInit | any; sdp?: any; type: "offer" },
   ): Promise<void> {
     const clientId = msg.source;
     this.callbacks.addLog(`Received offer from ${clientId}`);
+    console.log(`[WebRTCService] handleClientOffer: Offer details - data present: ${!!msg.data}, sdp present: ${!!msg.sdp}`);
 
     let connection = this.connections.get(clientId);
     if (!connection) {
+      // Creating new client connection
+      this.callbacks.addLog(`[WebRTCService] Creating new connection for client ${clientId}`);
+      
       // Create a new RTCPeerConnection if one doesn't exist
       const peerConnection = new RTCPeerConnection({
         iceServers: [
@@ -239,13 +276,8 @@ export class WebRTCService {
       // Set up event handlers for the RTCPeerConnection
       this.setupPeerConnectionEvents(peerConnection, clientId);
 
-      // Handle data channel created by the client
-      peerConnection.ondatachannel = (event) => {
-        this.callbacks.addLog(`[WebRTCService] handleClientOffer: ondatachannel event for ${clientId}, label: ${event.channel.label}`);
-        this.handleDataChannelEvent(event, clientId);
-      };
-
       // Store the new connection without data channels yet (they arrive via ondatachannel)
+      // CRITICAL: Store the connection in the map *before* setting ondatachannel or other async ops that might use it.
       connection = {
         peerConnection,
         reliableControlChannel: null,
@@ -253,12 +285,61 @@ export class WebRTCService {
         connected: false,
       };
       this.connections.set(clientId, connection);
+      console.log(`[WebRTCService] New connection created and stored for ${clientId}`);
+
+      // Handle data channel created by the client - this is crucial for WebRTC connection!
+      // Set this up *after* the connection object is in the map.
+      peerConnection.ondatachannel = (event) => {
+        // Data channel event received
+        this.callbacks.addLog(`[WebRTCService] ondatachannel event for ${clientId}, label: ${event.channel.label}`);
+        
+        // Process the incoming data channel
+        this.handleDataChannelEvent(event, clientId);
+        
+        // Note: Actual 'connected' status is now primarily managed by data channel onopen events
+        // within setupDataChannelEvents, which is called by handleDataChannelEvent.
+      };
+    } else {
+      // Using existing connection
+      // If reusing an existing connection, ensure its ondatachannel handler is set,
+      // as it might have been cleared or from a previous instance if logic changed.
+      // This is a defensive measure.
+      if (!connection.peerConnection.ondatachannel) {
+        // Re-assigning handler
+        connection.peerConnection.ondatachannel = (event) => {
+          console.log(`[WebRTCService] ondatachannel (re-assigned) event for ${clientId}, channel: ${event.channel.label}, readyState: ${event.channel.readyState}`);
+          this.callbacks.addLog(`[WebRTCService] ondatachannel (re-assigned) for ${clientId}, label: ${event.channel.label}`);
+          this.handleDataChannelEvent(event, clientId);
+        };
+      }
     }
 
     try {
+      // Debug log the offer data for troubleshooting
+      // Processing offer data
+      
+      // Handle different data formats - some clients send in data, others in sdp
+      let offerData = msg.data;
+      
+      // If data is missing but sdp is present, use that instead
+      if (!offerData && msg.sdp) {
+        offerData = msg.sdp;
+      }
+      
+      // Ensure the offer has the correct structure for RTCSessionDescription
+      if (offerData && (!offerData.type || !offerData.sdp)) {
+        if (typeof offerData === 'object' && offerData.sdp) {
+          // It has sdp but missing type
+          offerData = { ...offerData, type: 'offer' };
+        } else {
+          this.callbacks.addLog(`[WebRTCService] Invalid offer data structure from ${clientId}`);
+          throw new Error("Invalid offer data structure");
+        }
+      }
+      
       // Set the remote description (the client's offer)
       await connection.peerConnection.setRemoteDescription(
-        new RTCSessionDescription(msg.data),
+        new RTCSessionDescription(offerData),
       );
 
       // Create an answer
@@ -279,6 +360,13 @@ export class WebRTCService {
         `Error handling offer from ${clientId}: ${error}`,
       );
       console.error(`Error handling offer from ${clientId}:`, error);
+      console.error(`[WebRTCService] Offer message that caused error:`, JSON.stringify(msg));
+      
+      // Log detailed error with stack trace
+      if (error instanceof Error) {
+        console.error(`[WebRTCService] Error stack:`, error.stack);
+      }
+      
       this.removeConnection(clientId);
     }
   }
@@ -314,9 +402,13 @@ export class WebRTCService {
   }
 
   async handleIceCandidateFromClient(
-    msg: { source: string; data: RTCIceCandidateInit; type: "ice-candidate" },
+    msg: { source: string; data: RTCIceCandidateInit | null; type: "ice-candidate" },
   ): Promise<void> {
     const clientId = msg.source;
+    this.callbacks.addLog(
+      `[WebRTCService] Received ICE candidate from ${clientId}`,
+    );
+    console.log(`[WebRTCService] ICE candidate data:`, msg.data || "end-of-candidates");
 
     const connection = this.connections.get(clientId);
     if (!connection) {
@@ -326,10 +418,27 @@ export class WebRTCService {
       return;
     }
 
+    // Handle empty or null candidate (often used as an "end of candidates" indicator)
+    if (!msg.data || (msg.data.candidate === "" || msg.data.candidate === null)) {
+      this.callbacks.addLog(`[WebRTCService] Received end-of-candidates indicator from ${clientId}`);
+      return;
+    }
+
     try {
-      await connection.peerConnection.addIceCandidate(
-        new RTCIceCandidate(msg.data),
-      );
+      // Check if the candidate has required fields
+      if (!msg.data.sdpMid && msg.data.sdpMLineIndex === undefined) {
+        // Attempt to create a minimal valid candidate if possible
+        const candidateObj = {
+          candidate: msg.data.candidate,
+          sdpMid: msg.data.sdpMid || "0",
+          sdpMLineIndex: msg.data.sdpMLineIndex !== undefined ? msg.data.sdpMLineIndex : 0
+        };
+        await connection.peerConnection.addIceCandidate(new RTCIceCandidate(candidateObj));
+        this.callbacks.addLog(`[WebRTCService] Added reconstructed ICE candidate for ${clientId}`);
+      } else {
+        await connection.peerConnection.addIceCandidate(new RTCIceCandidate(msg.data));
+        this.callbacks.addLog(`[WebRTCService] Added ICE candidate for ${clientId}`);
+      }
     } catch (error) {
       this.callbacks.addLog(
         `Error adding ICE candidate for ${clientId}: ${error}`,
@@ -368,6 +477,7 @@ export class WebRTCService {
   private handleDataChannelEvent(event: RTCDataChannelEvent, clientId: string): void {
     const dataChannel = event.channel;
     this.callbacks.addLog(`[WebRTCService] Data channel [${dataChannel.label}] received for ${clientId}. Ordered: ${dataChannel.ordered}, MaxRetransmits: ${dataChannel.maxRetransmits}`);
+    console.log(`[WebRTCService] Data channel received: ${dataChannel.label} for client ${clientId}, readyState: ${dataChannel.readyState}`);
     
     const connection = this.connections.get(clientId);
     if (!connection) {
@@ -377,15 +487,43 @@ export class WebRTCService {
 
     if (dataChannel.label === "reliable_control") {
       connection.reliableControlChannel = dataChannel;
+      this.callbacks.addLog(`[WebRTCService] Reliable control channel assigned for ${clientId}`);
+      // Mark the connection as established immediately for the reliable control channel
+      connection.connected = true;
+      this.callbacks.onConnectionStateChange(clientId, true);
+      console.log(`[WebRTCService] Connection marked as established with ${clientId} via reliable channel`);
     } else if (dataChannel.label === "streaming_updates") {
       connection.streamingUpdatesChannel = dataChannel;
+      this.callbacks.addLog(`[WebRTCService] Streaming updates channel assigned for ${clientId}`);
     } else {
       this.callbacks.addLog(`[WebRTCService] Received data channel with unknown label: ${dataChannel.label}`);
+      console.warn(`[WebRTCService] Unknown data channel: ${dataChannel.label}`);
       // Optionally close it if it's unexpected: dataChannel.close();
       return;
     }
+    
+    // Update connection in map before setting up events
     this.connections.set(clientId, connection);
+    
+    // Set up event handlers for the channel
     this.setupDataChannelEvents(dataChannel, clientId);
+    
+    // If the channel is already open (rare case), trigger onopen handler manually
+    if (dataChannel.readyState === "open") {
+      this.callbacks.addLog(`[WebRTCService] Data channel ${dataChannel.label} was already open, triggering onopen handler`);
+      const openEvent = new Event("open");
+      dataChannel.dispatchEvent(openEvent);
+    }
+    
+    // Send a test message on the reliable control channel to confirm connection
+    if (dataChannel.label === "reliable_control" && dataChannel.readyState === "open") {
+      try {
+        dataChannel.send(JSON.stringify({ type: "connection_established", timestamp: Date.now() }));
+        console.log(`[WebRTCService] Sent test message on ${dataChannel.label} to ${clientId}`);
+      } catch (error) {
+        console.error(`[WebRTCService] Error sending test message: ${error}`);
+      }
+    }
   }
 
   sendMessageToClient(
@@ -408,18 +546,40 @@ export class WebRTCService {
 
     if (!channelToUse || channelToUse.readyState !== "open") {
       this.callbacks.addLog(`[WebRTCService] sendMessageToClient: Channel [${channelLabel}] for ${clientId} not open. State: ${channelToUse?.readyState}`);
+      
+      // If reliable channel is closed but connection is still marked as connected, update the state
+      if (channelLabel === "reliable_control" && connection.connected) {
+        connection.connected = false;
+        this.connections.set(clientId, connection);
+        this.callbacks.onConnectionStateChange(clientId, false);
+        this.callbacks.addLog(`[WebRTCService] Updated connection state for ${clientId} to disconnected`);
+      }
+      
       return false;
     }
 
     try {
-      channelToUse.send(
-        typeof message === "string" ? message : JSON.stringify(message),
-      );
+      const messageString = typeof message === "string" ? message : JSON.stringify(message);
+      channelToUse.send(messageString);
+      
+      // Log message type for debugging (without logging full content)
+      if (typeof message === "object" && message !== null && "type" in message) {
+        this.callbacks.addLog(`[WebRTCService] Sent message type "${(message as any).type}" to ${clientId} on ${channelLabel}`);
+      }
+      
       return true;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[WebRTCService] Error sending message to ${clientId} on [${channelLabel}]:`, error);
       this.callbacks.addLog(`Error sending message to client ${clientId}: ${errorMessage}`);
+      
+      // Mark connection as failed if this was on the reliable channel
+      if (channelLabel === "reliable_control" && connection.connected) {
+        connection.connected = false;
+        this.connections.set(clientId, connection);
+        this.callbacks.onConnectionStateChange(clientId, false);
+      }
+      
       return false;
     }
   }

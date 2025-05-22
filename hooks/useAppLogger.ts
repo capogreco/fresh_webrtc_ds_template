@@ -51,7 +51,7 @@ export default function useAppLogger(): UseAppLoggerReturn {
     // Console logging only
     if (level === "error") console.error(text);
     else if (level === "warn") console.warn(text);
-    else console.log(text);
+    else if (VERBOSE_LOGGING) console.log(text);
     
     // No UI updates at all
   }, []);

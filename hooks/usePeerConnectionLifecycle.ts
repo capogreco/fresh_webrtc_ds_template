@@ -100,9 +100,9 @@ export default function usePeerConnectionLifecycle(
     const currentClientId: string = clientIdSignal.value;
     const prefix = "[PCL][" + currentClientId + "]";
     const fullMessage = prefix + " " + message;
+    // Only log errors to console
     if (level === "error") console.error(fullMessage);
-    else if (level === "warn") console.warn(fullMessage);
-    else console.log(fullMessage);
+    // Add all messages to UI logs for debugging in the app interface
     addLog(fullMessage);
   }, [addLog, clientIdSignal]);
 
@@ -274,18 +274,21 @@ export default function usePeerConnectionLifecycle(
       return; // Don't set up handlers for unknown channels
     }
 
+    // Set up event handlers for the channel
+    const { label, id, ordered, maxRetransmits } = channel;
+    // log(`Setting up data channel: ${label}, ID: ${id}, Ordered: ${ordered}, MaxRetransmits: ${maxRetransmits}`, "info");
+
     channel.onopen = () => {
-      log(`Data channel "${channel.label}" opened.`);
-      console.log(`[PCL][${clientIdSignal.value}] Data channel ONOPEN: "${channel.label}", ID: ${channel.id}, ReadyState: ${channel.readyState}`);
-      if (channel.label === RELIABLE_CONTROL_CHANNEL_LABEL) {
-        log("Reliable control channel established - connection ready", "info");
-        webRtcConnectedSignal.value = true;
-        // Notify UI of the connection status change immediately with a separate log
-        log("WebRTC connection established successfully", "info");
-        console.log(`[PCL][${clientIdSignal.value}] WebRTC connection ESTABLISHED (via reliable channel open)`);
-        console.log(`[PCL_DEBUG][${clientIdSignal.value}] RELIABLE_CONTROL_CHANNEL_LABEL (${RELIABLE_CONTROL_CHANNEL_LABEL}) ONOPEN FIRED AND webRtcConnectedSignal SET TO TRUE.`);
+    // log(`Data channel "${channel.label}" opened.`, "info");
+    if (channel.label === RELIABLE_CONTROL_CHANNEL_LABEL) {
+      // log("Reliable control channel established - connection ready", "info");
+      webRtcConnectedSignal.value = true;
+      // Notify UI of the connection status change immediately with a separate log
+      // log("WebRTC connection established successfully", "info");
+      // console.log(`[PCL][${clientIdSignal.value}] WebRTC connection ESTABLISHED (via reliable channel open)`);
+      // console.log(`[PCL_DEBUG][${clientIdSignal.value}] RELIABLE_CONTROL_CHANNEL_LABEL (${RELIABLE_CONTROL_CHANNEL_LABEL}) ONOPEN FIRED AND webRtcConnectedSignal SET TO TRUE.`);
         
-        // Clear any reconnection timers
+      // Clear any reconnection timers
         if (reconnectionTimerRef.current) {
           clearTimeout(reconnectionTimerRef.current);
           reconnectionTimerRef.current = null;
@@ -311,8 +314,8 @@ export default function usePeerConnectionLifecycle(
           }
         }, 15000);
         heartbeatIntervalRef.current = timerId; // Deno's setInterval returns number, assignable to number | null
-        log("Heartbeat mechanism activated to maintain connection", "info");
-        console.log(`[PCL][${clientIdSignal.value}] Heartbeat mechanism activated.`);
+        // log("Heartbeat mechanism activated to maintain connection", "info");
+        // console.log(`[PCL][${clientIdSignal.value}] Heartbeat mechanism activated.`);
         
         // Send a test heartbeat message to ensure the channel is working
         try {
@@ -641,7 +644,7 @@ export default function usePeerConnectionLifecycle(
       const iceServers = await _fetchIceServers();
         const pc = await _createPeerConnection(iceServers);
 
-        log("Creating data channels (as offerer).");
+        // log("Creating data channels (as offerer).", "info");
         const reliableDc = pc.createDataChannel(RELIABLE_CONTROL_CHANNEL_LABEL, { ordered: true });
         const streamingDc = pc.createDataChannel(STREAMING_UPDATES_CHANNEL_LABEL, { ordered: false, maxRetransmits: 0 });
         _setupDataChannel(reliableDc);

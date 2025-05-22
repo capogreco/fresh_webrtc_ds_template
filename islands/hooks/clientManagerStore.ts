@@ -2,6 +2,7 @@ import { signal, Signal } from "@preact/signals";
 import type { WebRTCService } from "../../services/webrtcService.ts";
 import type { SynthClient } from "../../lib/types/client.ts";
 
+
 // Define the shape of the store
 interface ClientManagerStore {
   clientsSignal: Signal<Map<string, SynthClient>> | null;
@@ -22,6 +23,7 @@ export const store: ClientManagerStore = {
 // Getter for clientsSignal, initializes on first call
 export function getClientsSignal(): Signal<Map<string, SynthClient>> {
   if (store.clientsSignal === null) {
+    // Keep important initialization log
     console.log("[ClientManagerStore] Initializing shared clientsSignal.");
     store.clientsSignal = signal(new Map<string, SynthClient>());
   }
@@ -38,6 +40,7 @@ export async function getOrCreateWebRTCServiceInstance(
   callbacks: any, // Type this properly based on WebRTCServiceCallbacks
 ): Promise<WebRTCService> {
   if (store.webRTCServiceInstance === null) {
+    // Keep important initialization log
     console.log("[ClientManagerStore] Initializing shared WebRTCService instance.");
     // Dynamically import WebRTCService.
     // Ensure paths are correct relative to this file if WebRTCService is moved.
@@ -50,6 +53,7 @@ export async function getOrCreateWebRTCServiceInstance(
   } else {
     // Potentially update callbacks or other non-static parts if needed on subsequent calls,
     // but the instance itself is preserved. For now, assume constructor sets it up.
+    // Non-essential log: Returning existing service instance
     // console.log("[ClientManagerStore] Returning existing WebRTCService instance.");
   }
   return store.webRTCServiceInstance as WebRTCService; // Instance is guaranteed to be non-null here
@@ -57,6 +61,7 @@ export async function getOrCreateWebRTCServiceInstance(
 
 // Function to clear the stored instances, e.g., on full controller disconnect or re-init
 export function resetClientManagerStore() {
+  // Keep important state change log
   console.log("[ClientManagerStore] Resetting shared store.");
   store.clientsSignal = null;
   store.webRTCServiceInstance = null;

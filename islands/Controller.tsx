@@ -7,7 +7,7 @@ import {
   setupWakeLockListeners,
   type WakeLockSentinel,
 } from "../lib/utils/wakeLock.ts";
-import { useWebSocketSignaling } from "./hooks/useWebSocketSignaling.ts";
+import useWebSocketSignaling from "./hooks/useWebSocketSignaling.ts";
 import { useClientManager } from "./hooks/useClientManager.ts";
 import { formatTime } from "../lib/utils/formatTime.ts";
 import { ClientList } from "../components/controller/ClientList.tsx";
@@ -41,9 +41,11 @@ export default function Controller({ user, clientId }: ControllerProps) {
     null,
   );
   const _checkingControllerStatus = useSignal(false);
-  const clientManagerInstanceRef = useRef<ReturnType<
-    typeof useClientManager
-  > | null>(null);
+  const clientManagerInstanceRef = useRef<
+    ReturnType<
+      typeof useClientManager
+    > | null
+  >(null);
   const pingSentTimesRef = useRef<Map<string, number>>(new Map());
 
   // Add a log entry - memoized
@@ -56,7 +58,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
         if (logEl) logEl.scrollTop = logEl.scrollHeight;
       }, 0);
     },
-    [logs]
+    [logs],
   ); // logs signal reference is stable
 
   // Function to handle messages from clients
@@ -64,55 +66,82 @@ export default function Controller({ user, clientId }: ControllerProps) {
     (clientId: string, messageString: string, channelLabel: string) => {
       try {
         const parsedMsg = JSON.parse(messageString);
-        addLog(`[Controller] Msg from ${clientId} on [${channelLabel}]: type=${parsedMsg.type}`);
+        addLog(
+          `[Controller] Msg from ${clientId} on [${channelLabel}]: type=${parsedMsg.type}`,
+        );
 
-        if (parsedMsg.type === "app_pong" && parsedMsg.original_timestamp !== undefined && channelLabel === "reliable_control") {
+        if (
+          parsedMsg.type === "app_pong" &&
+          parsedMsg.original_timestamp !== undefined &&
+          channelLabel === "reliable_control"
+        ) {
           const originalSentTime = pingSentTimesRef.current.get(clientId);
-          
+
           if (originalSentTime === undefined) {
-            console.warn(`[Controller AppPing] Pong from ${clientId} but originalSentTime is undefined.`);
+            console.warn(
+              `[Controller AppPing] Pong from ${clientId} but originalSentTime is undefined.`,
+            );
             return;
           }
-          
+
           if (originalSentTime === parsedMsg.original_timestamp) {
             const rttMs = Date.now() - originalSentTime;
             const latencyMs = rttMs / 2;
 
-            pingSentTimesRef.current.delete(clientId); 
+            pingSentTimesRef.current.delete(clientId);
 
-            if (clientManagerInstanceRef.current && clientManagerInstanceRef.current.clients) {
-              const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
+            if (
+              clientManagerInstanceRef.current &&
+              clientManagerInstanceRef.current.clients
+            ) {
+              const currentClientsMap = clientManagerInstanceRef.current
+                ?.clients.value;
               if (currentClientsMap?.has(clientId)) {
                 const newClientsMap = new Map(currentClientsMap);
-                const clientToUpdate = newClientsMap.get(clientId)!; 
-                
+                const clientToUpdate = newClientsMap.get(clientId)!;
+
                 const updatedClient = {
                   ...clientToUpdate,
                   latency: latencyMs,
-                  staleLatency: false, 
+                  staleLatency: false,
                 };
                 newClientsMap.set(clientId, updatedClient);
                 if (clientManagerInstanceRef.current) {
-                  clientManagerInstanceRef.current.clients.value = newClientsMap;
+                  clientManagerInstanceRef.current.clients.value =
+                    newClientsMap;
                 }
-                
+
+                // Non-essential log: App ping latency
                 // console.log(`[Controller AppPing] Latency for ${clientId}: ${latencyMs.toFixed(0)}ms (RTT: ${rttMs}ms)`);
               }
             }
           } else if (originalSentTime) {
-            console.warn(`[Controller AppPing] Pong from ${clientId} for mismatched ping. Stored: ${originalSentTime}, Pong's: ${parsedMsg.original_timestamp}`);
+            console.warn(
+              `[Controller AppPing] Pong from ${clientId} for mismatched ping. Stored: ${originalSentTime}, Pong's: ${parsedMsg.original_timestamp}`,
+            );
           } else {
+            // Non-essential log: Unexpected pong
             // console.warn(`[Controller AppPing] Pong from ${clientId} but no ping registered (or already processed).`);
           }
-        } else if (parsedMsg.type === "stream_ack_pulse" && parsedMsg.original_ping_ts !== undefined && channelLabel === "streaming_updates") {
+        } else if (
+          parsedMsg.type === "stream_ack_pulse" &&
+          parsedMsg.original_ping_ts !== undefined &&
+          channelLabel === "streaming_updates"
+        ) {
           // Handle stream_ack_pulse
-          addLog(`[Controller] Received stream_ack_pulse from ${clientId} for original_ping_ts: ${parsedMsg.original_ping_ts}`);
-          if (clientManagerInstanceRef.current && clientManagerInstanceRef.current.clients) {
-            const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
+          addLog(
+            `[Controller] Received stream_ack_pulse from ${clientId} for original_ping_ts: ${parsedMsg.original_ping_ts}`,
+          );
+          if (
+            clientManagerInstanceRef.current &&
+            clientManagerInstanceRef.current.clients
+          ) {
+            const currentClientsMap = clientManagerInstanceRef.current?.clients
+              .value;
             if (currentClientsMap?.has(clientId)) {
               const newClientsMap = new Map(currentClientsMap);
               const clientToUpdate = newClientsMap.get(clientId)!;
-              
+
               const updatedClient = {
                 ...clientToUpdate,
                 lastStreamingAckPulseSeen: Date.now(),
@@ -122,34 +151,49 @@ export default function Controller({ user, clientId }: ControllerProps) {
               if (clientManagerInstanceRef.current) {
                 clientManagerInstanceRef.current.clients.value = newClientsMap;
               }
-              console.log(`[Controller StreamingHealth] Client ${clientId}: status set to 'active', lastSeen_ms_ago: ${Date.now() - updatedClient.lastStreamingAckPulseSeen}`);
+              // Client streaming status active
             }
           }
         } else if (parsedMsg.type === "audio_state") {
           addLog(
-            `[Controller] Client ${clientId} audio state: ${JSON.stringify(parsedMsg.audioState)}`
+            `[Controller] Client ${clientId} audio state: ${
+              JSON.stringify(parsedMsg.audioState)
+            }`,
           );
           // Potentially update client's audio state representation in the controller UI
-          const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
+          const currentClientsMap = clientManagerInstanceRef.current?.clients
+            .value;
           if (currentClientsMap && currentClientsMap.has(clientId)) {
-              const newClientsMap = new Map(currentClientsMap);
-              const clientToUpdate = newClientsMap.get(clientId)!;
-              const updatedClient = { ...clientToUpdate, audioState: parsedMsg.audioState }; // Assuming SynthClient has audioState
-              newClientsMap.set(clientId, updatedClient);
-              if (clientManagerInstanceRef.current) clientManagerInstanceRef.current.clients.value = newClientsMap;
+            const newClientsMap = new Map(currentClientsMap);
+            const clientToUpdate = newClientsMap.get(clientId)!;
+            const updatedClient = {
+              ...clientToUpdate,
+              audioState: parsedMsg.audioState,
+            }; // Assuming SynthClient has audioState
+            newClientsMap.set(clientId, updatedClient);
+            if (clientManagerInstanceRef.current) {
+              clientManagerInstanceRef.current.clients.value = newClientsMap;
+            }
           }
-
         } else if (parsedMsg.type === "request_instrument_definition") {
           // This should NOT be happening if client fix is working, but good to log if it does.
-          addLog(`[Controller] Warning: Received unexpected request_instrument_definition from ${clientId}`);
+          addLog(
+            `[Controller] Warning: Received unexpected request_instrument_definition from ${clientId}`,
+          );
         } else {
-          addLog(`[Controller] Unhandled message type '${parsedMsg.type || "unknown"}' from ${clientId} on [${channelLabel}]`);
+          addLog(
+            `[Controller] Unhandled message type '${
+              parsedMsg.type || "unknown"
+            }' from ${clientId} on [${channelLabel}]`,
+          );
         }
       } catch (error) {
-        addLog(`[Controller] Error parsing message from ${clientId} on [${channelLabel}]: ${messageString}. Error: ${error}`);
+        addLog(
+          `[Controller] Error parsing message from ${clientId} on [${channelLabel}]: ${messageString}. Error: ${error}`,
+        );
       }
     },
-    [addLog, clientManagerInstanceRef, pingSentTimesRef] // Ensure all dependencies are included
+    [addLog, clientManagerInstanceRef, pingSentTimesRef], // Ensure all dependencies are included
   );
 
   // Function to get the current live global parameters for Ikeda synth
@@ -158,202 +202,198 @@ export default function Controller({ user, clientId }: ControllerProps) {
       instrument_id: "ikeda_synth_v1",
       synth_engine: { type: "ikeda_engine_v1" },
       global_settings: {
-        active: { 
-          is_resolved: true, 
-          value: true, 
-          update_channel: "reliable"
+        active: {
+          is_resolved: true,
+          value: true,
+          update_channel: "reliable",
         },
-        tempo_cpm: { 
-          is_resolved: true, 
-          value: 120, 
-          update_channel: "streaming"
+        tempo_cpm: {
+          is_resolved: true,
+          value: 120,
+          update_channel: "streaming",
         },
-        beats_per_global_cycle: { 
-          is_resolved: true, 
-          value: 4, 
-          update_channel: "reliable"
+        beats_per_global_cycle: {
+          is_resolved: true,
+          value: 4,
+          update_channel: "reliable",
         },
       },
       parameters: {
         // Pink Noise Layer
-        pink_noise_active: { 
-          is_resolved: true, 
-          value: true, 
-          update_channel: "reliable"
+        pink_noise_active: {
+          is_resolved: true,
+          value: true,
+          update_channel: "reliable",
         },
-        pink_noise_volume: { 
-          is_resolved: true, 
-          value: 0.5, 
-          update_channel: "streaming"
+        pink_noise_volume: {
+          is_resolved: true,
+          value: 0.5,
+          update_channel: "streaming",
         },
-        pink_noise_reverb_wet_dry: { 
-          is_resolved: true, 
-          value: 0.3, 
-          update_channel: "reliable"
+        pink_noise_reverb_wet_dry: {
+          is_resolved: true,
+          value: 0.3,
+          update_channel: "reliable",
         },
         pink_noise_lfo_rate_rule: {
           is_resolved: false,
           value: {
             rule_type: "harmonic_ratio_cpm",
-            numerator: { 
-              values: [1], 
-              selection_mode: "static" 
+            numerator: {
+              values: [1],
+              selection_mode: "static",
             },
-            denominator: { 
-              values: [1, 2, 4, 8], 
-              selection_mode: "static" 
+            denominator: {
+              values: [1, 2, 4, 8],
+              selection_mode: "static",
             },
           },
           update_channel: "reliable",
         },
-        pink_noise_lfo_shape: { 
-          is_resolved: true, 
-          value: "sine", 
-          update_channel: "reliable" 
-        },
-        pink_noise_lfo_initial_phase_randomized: { 
-          is_resolved: true, 
-          value: true, 
-          update_channel: "reliable" 
+        // pink_noise_lfo_shape removed - LFO processor now only supports cosine
+        pink_noise_lfo_initial_phase_randomized: {
+          is_resolved: true,
+          value: true,
+          update_channel: "reliable",
         },
 
         // Blips Layer
-        blip_active: { 
-          is_resolved: true, 
-          value: true, 
-          update_channel: "reliable" 
+        blip_active: {
+          is_resolved: true,
+          value: true,
+          update_channel: "reliable",
         },
-        blip_base_f0_hz: { 
-          is_resolved: true, 
-          value: 220, 
-          update_channel: "streaming" 
+        blip_base_f0_hz: {
+          is_resolved: true,
+          value: 220,
+          update_channel: "streaming",
         },
         blip_pitch_harmonic_ratio_rule: {
           is_resolved: false,
           value: {
             rule_type: "harmonic_ratio_pitch",
-            numerator: { 
-              values: [1, 2, 3, 4], 
-              selection_mode: "static" 
+            numerator: {
+              values: [1, 2, 3, 4],
+              selection_mode: "static",
             },
-            denominator: { 
-              values: [1, 2, 3, 4], 
-              selection_mode: "static" 
+            denominator: {
+              values: [1, 2, 3, 4],
+              selection_mode: "static",
             },
           },
           update_channel: "reliable",
         },
-        blip_duration_ms: { 
-          is_resolved: true, 
-          value: 100, 
-          update_channel: "reliable" 
+        blip_duration_ms: {
+          is_resolved: true,
+          value: 100,
+          update_channel: "reliable",
         },
         blip_euclidean_rhythm_rule: {
           is_resolved: false,
           value: {
             rule_type: "euclidean_rhythm_trigger",
-            pulses: { 
-              values: [3], 
-              selection_mode: "static" 
+            pulses: {
+              values: [3],
+              selection_mode: "static",
             },
-            steps: { 
-              values: [8], 
-              selection_mode: "static" 
+            steps: {
+              values: [8],
+              selection_mode: "static",
             },
-            offset: { 
-              values: [0], 
-              selection_mode: "static" 
+            offset: {
+              values: [0],
+              selection_mode: "static",
             },
           },
           update_channel: "reliable",
         },
-        blip_amplitude: { 
-          is_resolved: true, 
-          value: 0.7, 
-          update_channel: "streaming" 
+        blip_amplitude: {
+          is_resolved: true,
+          value: 0.7,
+          update_channel: "streaming",
         },
-        blip_reverb_wet_dry: { 
-          is_resolved: true, 
-          value: 0.2, 
-          update_channel: "reliable" 
+        blip_reverb_wet_dry: {
+          is_resolved: true,
+          value: 0.2,
+          update_channel: "reliable",
         },
-        blip_timbre_source: { 
-          is_resolved: true, 
-          value: "sine_env", 
-          update_channel: "reliable" 
+        blip_timbre_source: {
+          is_resolved: true,
+          value: "sine_env",
+          update_channel: "reliable",
         },
 
         // Clicks Layer
-        click_active: { 
-          is_resolved: true, 
-          value: true, 
-          update_channel: "reliable" 
+        click_active: {
+          is_resolved: true,
+          value: true,
+          update_channel: "reliable",
         },
-        click_timbre_source: { 
-          is_resolved: true, 
-          value: "digital_impulse", 
-          update_channel: "reliable" 
+        click_timbre_source: {
+          is_resolved: true,
+          value: "digital_impulse",
+          update_channel: "reliable",
         },
-        click_length_ms: { 
-          is_resolved: true, 
-          value: 1.0, 
-          update_channel: "reliable" 
+        click_length_ms: {
+          is_resolved: true,
+          value: 1.0,
+          update_channel: "reliable",
         },
         click_euclidean_rhythm_rule: {
           is_resolved: false,
           value: {
             rule_type: "euclidean_rhythm_trigger",
-            pulses: { 
-              values: [4], 
-              selection_mode: "static" 
+            pulses: {
+              values: [4],
+              selection_mode: "static",
             },
-            steps: { 
-              values: [16], 
-              selection_mode: "static" 
+            steps: {
+              values: [16],
+              selection_mode: "static",
             },
-            offset: { 
-              values: [0], 
-              selection_mode: "static" 
+            offset: {
+              values: [0],
+              selection_mode: "static",
             },
           },
           update_channel: "reliable",
         },
-        click_reverb_wet_dry: { 
-          is_resolved: true, 
-          value: 0.1, 
-          update_channel: "reliable" 
+        click_reverb_wet_dry: {
+          is_resolved: true,
+          value: 0.1,
+          update_channel: "reliable",
         },
 
         // White Noise Snare Layer
-        snare_active_after_reset: { 
-          is_resolved: true, 
-          value: true, 
-          update_channel: "reliable" 
+        snare_active_after_reset: {
+          is_resolved: true,
+          value: true,
+          update_channel: "reliable",
         },
-        snare_timbre_source: { 
-          is_resolved: true, 
-          value: "white_noise_rectangular_env", 
-          update_channel: "reliable" 
+        snare_timbre_source: {
+          is_resolved: true,
+          value: "white_noise_rectangular_env",
+          update_channel: "reliable",
         },
-        snare_duration_beats: { 
-          is_resolved: true, 
-          value: 1, 
-          update_channel: "reliable" 
+        snare_duration_beats: {
+          is_resolved: true,
+          value: 1,
+          update_channel: "reliable",
         },
-        snare_amplitude: { 
-          is_resolved: true, 
-          value: 0.8, 
-          update_channel: "reliable" 
+        snare_amplitude: {
+          is_resolved: true,
+          value: 0.8,
+          update_channel: "reliable",
         },
-        snare_reverb_wet_dry: { 
-          is_resolved: true, 
-          value: 0.25, 
-          update_channel: "reliable" 
+        snare_reverb_wet_dry: {
+          is_resolved: true,
+          value: 0.25,
+          update_channel: "reliable",
         },
-        snare_target_beat_in_cycle: { 
-          is_resolved: true, 
-          value: 3, 
-          update_channel: "reliable" 
+        snare_target_beat_in_cycle: {
+          is_resolved: true,
+          value: 3,
+          update_channel: "reliable",
         },
       },
     };
@@ -393,7 +433,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
           clientManagerInstanceRef.current.clients.value.keys(),
         );
         clientIds.forEach((clientId) =>
-          clientManagerInstanceRef.current!.disconnectFromClient(clientId),
+          clientManagerInstanceRef.current!.disconnectFromClient(clientId)
         );
       }
     },
@@ -417,12 +457,25 @@ export default function Controller({ user, clientId }: ControllerProps) {
       data: RTCSessionDescriptionInit;
       type: "offer";
     }) => {
-      console.log(
-        "[Controller] onOfferReceivedCallback FIRED for source:",
-        msg.source,
-      ); // <--- ADD THIS
+      // Offer received
       addLog(`[Controller] Hook: Offer received from ${msg.source}`);
-      clientManagerInstanceRef.current?.handleClientOffer?.(msg);
+      
+      // Check if the client manager and handler are available
+      if (!clientManagerInstanceRef.current) {
+        console.error("[Controller] Client manager not available to handle offer from", msg.source);
+        addLog(`[Controller] ERROR: Client manager not available to handle offer from ${msg.source}`);
+        return;
+      }
+      
+      if (!clientManagerInstanceRef.current.handleClientOffer) {
+        console.error("[Controller] handleClientOffer method not available in client manager");
+        addLog(`[Controller] ERROR: handleClientOffer method not available to process offer from ${msg.source}`);
+        return;
+      }
+      
+      // Processing offer
+      clientManagerInstanceRef.current.handleClientOffer(msg);
+      addLog(`[Controller] Processed offer from ${msg.source}. WebRTC connection attempt in progress.`);
     },
     [addLog],
   );
@@ -433,10 +486,12 @@ export default function Controller({ user, clientId }: ControllerProps) {
       data: RTCSessionDescriptionInit;
       type: "answer";
     }) => {
-      console.log(
-        "[Controller] onAnswerReceivedCallback FIRED for source:",
-        msg.source,
-      ); // <--- ADD THIS
+      // Non-essential log: Answer received callback fired
+      // console.log(
+      //   "[Controller] onAnswerReceivedCallback FIRED for source:",
+      //   msg.source,
+      //   "data present:", !!msg.data
+      // );
       addLog(`[Controller] Hook: Answer received from ${msg.source}`);
       clientManagerInstanceRef.current?.handleAnswerFromClient?.(msg);
     },
@@ -449,10 +504,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
       data: RTCIceCandidateInit;
       type: "ice-candidate";
     }) => {
-      console.log(
-        "[Controller] onIceCandidateReceivedCallback FIRED for source:",
-        msg.source,
-      ); // <--- ADD THIS
+      // ICE candidate received
       addLog(`[Controller] Hook: ICE candidate received from ${msg.source}`);
       clientManagerInstanceRef.current?.handleIceCandidateFromClient?.(msg);
     },
@@ -492,7 +544,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
 
   // Setup WebSocket Signaling Hook
   const wsSignal = useWebSocketSignaling({
-    controllerId: id, // id signal ref is stable
+    localId: id, // id signal ref is stable
     // addLog, // No longer passed; useWebSocketSignaling uses console.log internally
     onOfferReceived: onOfferReceivedCallback,
     onAnswerReceived: onAnswerReceivedCallback,
@@ -500,10 +552,21 @@ export default function Controller({ user, clientId }: ControllerProps) {
     onControllerKicked: onControllerKickedCallback,
     onClientDisconnected: onClientDisconnectedCallback,
     onServerError: onServerErrorCallback,
+    onOpen: (event) => {
+      // WebSocket connected
+      addLog("[Controller] WebSocket connection established");
+    },
+    onClose: (event, details) => {
+      // WebSocket closed
+      addLog(`[Controller] WebSocket connection closed. Code: ${details.code}, Reason: ${details.reason}`);
+    },
+    onError: (event) => {
+      addLog("[Controller] WebSocket connection error occurred");
+    },
   });
 
   // Computed signal for controller active state
-  const controlActive = computed(() => wsSignal.isConnected.value);
+  const controlActive = computed(() => wsSignal.isConnectedSignal.value);
 
   // Initialize client manager
   // const memoizedWsSignalProp = useMemo(() => ({
@@ -515,14 +578,16 @@ export default function Controller({ user, clientId }: ControllerProps) {
   // Using real wsSignal for useClientManager.
 
   const dummyAddLog = useCallback(() => {
-    /* Do nothing */ console.log(
-      "[Controller] dummyAddLog called - this should not affect logs signal",
-    );
+    /* Do nothing */
+      // Non-essential log: Dummy function call
+      // console.log(
+      //   "[Controller] dummyAddLog called - this should not affect logs signal",
+      // );
   }, []);
 
   // Create a typed wrapper for wsSignal to satisfy the useClientManager interface
   const wsSignalForManager = useMemo(() => ({
-    sendMessage: (message: unknown) => { 
+    sendMessage: (message: unknown) => {
       // wsSignal.sendMessage expects WebSocketMessage but WebRTCService passes unknown
       // This wrapper handles the type conversion safely
       wsSignal.sendMessage(message as WebSocketMessage);
@@ -547,6 +612,7 @@ export default function Controller({ user, clientId }: ControllerProps) {
       _clientManagerFromHook.clients.value.values(),
     ).filter((client) => client.connected).length;
     // HANG_DEBUG: Log the computed count value itself
+    // Non-essential log: Connected clients count
     // console.log("[Controller DEBUG] local connectedClientsCount.value (from computed):", count); // Reduced noise
     return count;
   });
@@ -588,24 +654,32 @@ export default function Controller({ user, clientId }: ControllerProps) {
         Object.keys(clientManagerInstanceRef.current),
       );
     }
-    
+
     // Register the message handler callback
     if (
       clientManagerInstanceRef.current &&
-      typeof (clientManagerInstanceRef.current as any).setMessageFromClientCallback ===
+      typeof (clientManagerInstanceRef.current as any)
+          .setMessageFromClientCallback ===
         "function"
     ) {
       (clientManagerInstanceRef.current as any).setMessageFromClientCallback(
-        onMessageFromClient
+        onMessageFromClient,
       );
-      addLog("[Controller] Registered onMessageFromClient handler with ClientManager.");
+      addLog(
+        "[Controller] Registered onMessageFromClient handler with ClientManager.",
+      );
     } else if (clientManagerInstanceRef.current) {
       console.warn(
         "[Controller] clientManagerInstanceRef.current.setMessageFromClientCallback is NOT a function. Current keys:",
         Object.keys(clientManagerInstanceRef.current),
       );
     }
-  }, [_clientManagerFromHook, getLiveGlobalParams, addLog, onMessageFromClient]);
+  }, [
+    _clientManagerFromHook,
+    getLiveGlobalParams,
+    addLog,
+    onMessageFromClient,
+  ]);
 
   // Public handler for controller kicked (if needed elsewhere, though now internal logic is primary)
   // This is mostly for completeness if other parts of Controller might call it.
@@ -655,122 +729,107 @@ export default function Controller({ user, clientId }: ControllerProps) {
   // Effect to set up the controller on mount
   useEffect(() => {
     addLog("Controller mounted. Setting up connections and wake lock.");
-    // TODO: Re-enable wake lock logic once core stability is confirmed and features are built.
-    // // Request wake lock to prevent screen from sleeping
-    // const activateWakeLock = async () => {
-    //   try {
-    //     const lock = await requestWakeLock();
-    //     wakeLock.value = lock;
-    //     // addLog("Activated wake lock to prevent screen from sleeping");
-    //   } catch (error) {
-    //     // addLog(`Error activating wake lock: ${error}`);
-    //     console.warn("Error activating wake lock:", error);
-    //   }
-    // };
 
-    // // Setup wake lock event listeners (screen visibility changes)
-    // setupWakeLockListeners(() => wakeLock.value, activateWakeLock);
+    // Capture references to avoid closure issues
+    const wsSignalRef = wsSignal;
+    const logFn = addLog;
 
     // Connect to WebSocket
-    wsSignal
+    wsSignalRef
       .connect()
       .then(() => {
-        addLog("Controller active and connected to signaling server");
-
-        if (
-          clientManagerInstanceRef.current &&
-          typeof (clientManagerInstanceRef.current as any).startPinging ===
-            "function"
-        ) {
-          // (clientManagerInstanceRef.current as any).startPinging(5000);
-        }
+        logFn("Controller active and connected to signaling server");
       })
       .catch((error) => {
-        addLog(`Failed to connect to signaling server: ${error}`);
+        logFn(`Failed to connect to signaling server: ${error}`);
         console.error("Failed to connect to signaling server:", error);
       });
 
     // Cleanup function when component unmounts
     return () => {
-      addLog("Controller unmounting. Cleaning up.");
-      // HANG_DEBUG: Pinging and wake lock cleanup still commented (for now)
-      // // Stop pinging capability has been removed
+      logFn("Controller unmounting. Cleaning up.");
 
-      // Disconnect WebSocket
-      wsSignal.disconnect();
-
-      // // Release wake lock
-      // if (wakeLock.value) {
-      //   wakeLock.value.release()
-      //     .then(() => console.log("Wake lock released"))
-      //     .catch((err) => console.error("Error releasing wake lock:", err));
-      //   wakeLock.value = null;
-      // }
-
-      // // Clear any intervals
-      // if (_statusCheckInterval.value !== null) {
-      //   clearInterval(_statusCheckInterval.value);
-      //   _statusCheckInterval.value = null;
-      // }
+      // Disconnect WebSocket - use captured reference
+      wsSignalRef.disconnect(true); // true = user initiated (component unmount)
     };
-  }, []);
-  
+  }, []); // Empty dependency array - only run on mount/unmount
+
   // Effect for periodic ping sending
   useEffect(() => {
     const pingInterval = setInterval(() => {
-      if (clientManagerInstanceRef.current && clientManagerInstanceRef.current.clients && clientManagerInstanceRef.current.sendMessageToClient) {
-        const clientIds = Array.from(clientManagerInstanceRef.current.clients.value.keys());
-        
-        clientIds.forEach(clientId => {
-          const client = clientManagerInstanceRef.current?.clients.value.get(clientId);
+      if (
+        clientManagerInstanceRef.current &&
+        clientManagerInstanceRef.current.clients &&
+        clientManagerInstanceRef.current.sendMessageToClient
+      ) {
+        const clientIds = Array.from(
+          clientManagerInstanceRef.current.clients.value.keys(),
+        );
+
+        clientIds.forEach((clientId) => {
+          const client = clientManagerInstanceRef.current?.clients.value.get(
+            clientId,
+          );
           if (client && client.connected) { // Only ping connected clients
             const now = Date.now();
             pingSentTimesRef.current.set(clientId, now);
-            
+
             const pingMsg = { type: "app_ping", timestamp: now };
-            const success = clientManagerInstanceRef.current?.sendMessageToClient(
-              clientId,
-              JSON.stringify(pingMsg), // Ensure message is stringified
-              "reliable_control"
-            );
+            const success = clientManagerInstanceRef.current
+              ?.sendMessageToClient(
+                clientId,
+                JSON.stringify(pingMsg), // Ensure message is stringified
+                "reliable_control",
+              );
             if (success) {
+              // Non-essential log: App ping sent
               // console.log(`[Controller AppPing] Sent app_ping to ${clientId} at ${now}`);
             } else {
+              // Non-essential log: App ping send failure
               // console.warn(`[Controller AppPing] Failed to send app_ping to ${clientId}`);
               pingSentTimesRef.current.delete(clientId); // Clean up if send failed immediately
             }
-            
+
             // Check and update streaming channel health
             // First, initialize streamingChannelHealth if not set
             if (client.streamingChannelHealth === undefined) { // Initialize if not set
               let healthNeedsInit = false;
               let initialHealth: "unknown" | "active" | "stale" = "unknown"; // Default for truly new
-              
+
               // If there's a recent pulse seen (e.g. from a very fast first message), mark active
-              if (client.lastStreamingAckPulseSeen && (Date.now() - client.lastStreamingAckPulseSeen < 7000) ) {
-                  initialHealth = "active";
+              if (
+                client.lastStreamingAckPulseSeen &&
+                (Date.now() - client.lastStreamingAckPulseSeen < 7000)
+              ) {
+                initialHealth = "active";
               }
               // Check if current map version already has it from onMessageFromClient to avoid overwriting "active" with "unknown"
-              const currentClientInMap = clientManagerInstanceRef.current?.clients.value.get(clientId);
+              const currentClientInMap = clientManagerInstanceRef.current
+                ?.clients.value.get(clientId);
               if (!currentClientInMap?.streamingChannelHealth) { // only update if not already set by onMessage
                 healthNeedsInit = true;
               }
 
               if (healthNeedsInit) {
-                  console.log(`[Controller StreamingHealth] Client ${clientId}: initializing health to '${initialHealth}'`);
-                  const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
-                  const newClientsMap = new Map(currentClientsMap);
-                  const clientToUpdate = newClientsMap.get(clientId);
-                  if (clientToUpdate) {
-                      const updatedClientData = { ...clientToUpdate, streamingChannelHealth: initialHealth };
-                      newClientsMap.set(clientId, updatedClientData);
-                      if (clientManagerInstanceRef.current) {
-                        clientManagerInstanceRef.current.clients.value = newClientsMap;
-                      }
+                // Initializing streaming health status
+                const currentClientsMap = clientManagerInstanceRef.current
+                  ?.clients.value;
+                const newClientsMap = new Map(currentClientsMap);
+                const clientToUpdate = newClientsMap.get(clientId);
+                if (clientToUpdate) {
+                  const updatedClientData = {
+                    ...clientToUpdate,
+                    streamingChannelHealth: initialHealth,
+                  };
+                  newClientsMap.set(clientId, updatedClientData);
+                  if (clientManagerInstanceRef.current) {
+                    clientManagerInstanceRef.current.clients.value =
+                      newClientsMap;
                   }
+                }
               }
             }
-            
+
             // Now check for staleness
             let healthNeedsUpdate = false;
             let newStreamingHealth = client.streamingChannelHealth;
@@ -778,33 +837,46 @@ export default function Controller({ user, clientId }: ControllerProps) {
             if (client.lastStreamingAckPulseSeen) {
               const timeSinceLastPulse = now - client.lastStreamingAckPulseSeen;
               const staleThreshold = 7000; // e.g., a bit more than 2 ping intervals (3s*2 + 1s buffer)
-              if (timeSinceLastPulse > staleThreshold && client.streamingChannelHealth !== "stale") {
-                addLog(`[Controller] Streaming channel for ${clientId} marked STALE (no pulse for ${timeSinceLastPulse}ms).`);
+              if (
+                timeSinceLastPulse > staleThreshold &&
+                client.streamingChannelHealth !== "stale"
+              ) {
+                addLog(
+                  `[Controller] Streaming channel for ${clientId} marked STALE (no pulse for ${timeSinceLastPulse}ms).`,
+                );
                 newStreamingHealth = "stale";
                 healthNeedsUpdate = true;
-              } else if (timeSinceLastPulse <= staleThreshold && client.streamingChannelHealth === "stale") {
+              } else if (
+                timeSinceLastPulse <= staleThreshold &&
+                client.streamingChannelHealth === "stale"
+              ) {
                 // It became active again if a pulse was received by onMessageFromClient
                 // This logic here is mainly for marking as stale. "active" is set by onMessageFromClient.
               }
             } else if (client.streamingChannelHealth !== "unknown") {
               // No pulse ever seen, mark as unknown (or initially stale)
               // This could be set when client is added too.
-              // newStreamingHealth = "unknown"; 
+              // newStreamingHealth = "unknown";
               // healthNeedsUpdate = true;
             }
 
             if (healthNeedsUpdate) {
-              const currentClientsMap = clientManagerInstanceRef.current?.clients.value;
+              const currentClientsMap = clientManagerInstanceRef.current
+                ?.clients.value;
               if (currentClientsMap) {
                 const newClientsMap = new Map(currentClientsMap);
                 const clientToUpdate = newClientsMap.get(clientId); // Re-get to ensure it's the latest from the map
                 if (clientToUpdate) {
-                  const updatedClientData = { ...clientToUpdate, streamingChannelHealth: newStreamingHealth };
+                  const updatedClientData = {
+                    ...clientToUpdate,
+                    streamingChannelHealth: newStreamingHealth,
+                  };
                   newClientsMap.set(clientId, updatedClientData);
                   if (clientManagerInstanceRef.current) {
-                    clientManagerInstanceRef.current.clients.value = newClientsMap;
+                    clientManagerInstanceRef.current.clients.value =
+                      newClientsMap;
                   }
-                  console.log(`[Controller StreamingHealth] Client ${clientId}: status updated to '${newStreamingHealth}', lastSeen_ms_ago: ${clientToUpdate && clientToUpdate.lastStreamingAckPulseSeen ? Date.now() - clientToUpdate.lastStreamingAckPulseSeen : 'never'}`);
+                  // Updated streaming health status
                 }
               }
             }
@@ -838,10 +910,10 @@ export default function Controller({ user, clientId }: ControllerProps) {
           <strong>Connected Clients (direct):</strong>{" "}
           {_clientManagerFromHook?.clients
             ? String(
-                Array.from(
-                  _clientManagerFromHook.clients.value.values(),
-                ).filter((c) => c.connected).length,
-              )
+              Array.from(
+                _clientManagerFromHook.clients.value.values(),
+              ).filter((c) => c.connected).length,
+            )
             : "0 (cm_null)"}
         </div>
         <div>
@@ -860,7 +932,9 @@ export default function Controller({ user, clientId }: ControllerProps) {
         style="margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px;"
       >
         <h2>Controller Status</h2>
-        <p>Current Operating Mode: <strong>IKEDA</strong></p>
+        <p>
+          Current Operating Mode: <strong>IKEDA</strong>
+        </p>
         {/* Add additional global controls here */}
       </div>
 
@@ -904,7 +978,11 @@ export default function Controller({ user, clientId }: ControllerProps) {
             type="button"
             class="button"
             onClick={() => {
-              if (clientManagerInstanceRef.current && typeof (clientManagerInstanceRef.current as any).broadcastMessage === 'function') {
+              if (
+                clientManagerInstanceRef.current &&
+                typeof (clientManagerInstanceRef.current as any)
+                    .broadcastMessage === "function"
+              ) {
                 const testMessage = JSON.stringify({
                   type: "test_stream",
                   content: "Hello from streaming_updates channel!",
@@ -916,10 +994,13 @@ export default function Controller({ user, clientId }: ControllerProps) {
                 );
                 addLog("Sent test broadcast on streaming_updates channel.");
               } else {
-                addLog("[Controller] Test Streaming Channel button: broadcastMessage not available or manager not ready.");
+                addLog(
+                  "[Controller] Test Streaming Channel button: broadcastMessage not available or manager not ready.",
+                );
               }
             }}
-            disabled={!controlActive.value || (connectedClientsCount.value ?? 0) === 0}
+            disabled={!controlActive.value ||
+              (connectedClientsCount.value ?? 0) === 0}
           >
             Send Test on Streaming Channel
           </button>

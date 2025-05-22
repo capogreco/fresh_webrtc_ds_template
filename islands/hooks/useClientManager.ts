@@ -60,7 +60,7 @@ export function useClientManager(
 
   const handleDataChannelMessage = useCallback(
     (clientId: string, channelLabel: string, data: unknown) => {
-      console.log(`[ClientManager] Received message on [${channelLabel}] from ${clientId}:`, data);
+      // Non-essential log: Received message
       
       // Handle string messages (like our app_pong that will be coming from clients)
       if (typeof data === "string") {
@@ -87,12 +87,12 @@ export function useClientManager(
             const newClientsMap = new Map(clients.value);
             newClientsMap.set(clientId, updatedClient);
             clients.value = newClientsMap;
-            console.log(`[ClientManager] Updated synth_status for ${clientId} (legacy message).`);
+            // Non-essential log: Updated synth_status
           }
           break;
         }
         case "request_instrument_definition":
-          console.log(`[ClientManager] Client ${clientId} requested instrument definition on [${channelLabel}].`);
+          // Non-essential log: Client requested instrument definition
           if (clientManagerStore.webRTCServiceInstance) {
             const currentInstrumentDef = liveParamsGetterRef.current ? liveParamsGetterRef.current() : {};
             clientManagerStore.webRTCServiceInstance.sendMessageToClient(
@@ -100,11 +100,11 @@ export function useClientManager(
               { type: "set_instrument_definition", definition: currentInstrumentDef, },
               "reliable_control"
             );
-            console.log(`[ClientManager] Sent set_instrument_definition to ${clientId}.`);
+            // Non-essential log: Sent instrument definition
           }
           break;
         case "instrument_specific_feedback":
-            console.log(`[ClientManager] Received instrument_specific_feedback from ${clientId} on [${channelLabel}]:`, (typedData as any).feedback_data);
+            // Instrument feedback received
             break;
         default:
           // Pass all other message types to the controller's message handler if registered
@@ -124,7 +124,7 @@ export function useClientManager(
 
   const handleDataChannelOpen = useCallback(
     (clientId: string, dataChannel: RTCDataChannel) => {
-      console.log(`[ClientManager] Data channel [${dataChannel.label}] opened for client ${clientId}`);
+      // Non-essential log: Data channel opened
       if (!clientManagerStore.webRTCServiceInstance) {
         console.warn("[ClientManager] WebRTCService instance not available for handleDataChannelOpen actions.");
         return;
@@ -158,7 +158,7 @@ export function useClientManager(
 
   const handleDataChannelClose = useCallback(
     (clientId: string, channelLabel: string) => {
-      console.log(`[ClientManager] Data channel [${channelLabel}] closed for client ${clientId}.`);
+      // Non-essential log: Data channel closed
       const client = clients.value.get(clientId);
       if (client && channelLabel === "reliable_control") {
         const updatedClient: SynthClient = { ...client, connected: false };
@@ -175,7 +175,7 @@ export function useClientManager(
       const newClientsMap = new Map(clients.value);
       if (newClientsMap.delete(clientId)) {
         clients.value = newClientsMap;
-        console.log(`[ClientManager] Client ${clientId} removed from state after WebRTC cleanup.`);
+        // Non-essential log: Client removed from state
       }
     },
     [clients], // `clients` from store
@@ -183,7 +183,13 @@ export function useClientManager(
 
   useEffect(() => {
     const callbacks = {
-      addLog: (text: string) => console.log(`[WebRTCService LOG by ClientManager]: ${text}`),
+      // Disable most logging by using a no-op function for non-critical logs
+      addLog: (text: string) => {
+        // Only log errors and critical status changes, ignore all routine logs
+        if (text.includes("Error") || text.includes("failed")) {
+          console.log(`[WebRTC Error]: ${text}`);
+        }
+      },
       onConnectionStateChange: handleConnectionStateChange,
       onDataChannelMessage: handleDataChannelMessage,
       onDataChannelOpen: handleDataChannelOpen,
@@ -193,7 +199,6 @@ export function useClientManager(
     const initializeService = async () => {
       // Pass the stable controllerId signal and wsSignal wrapper from props
       await getOrCreateWebRTCServiceInstance(controllerId, wsSignal, callbacks);
-      console.log("[ClientManager] Shared WebRTCService instance is ready/ensured.");
     };
     initializeService().catch(error => {
       console.error("[ClientManager] Error initializing WebRTCService instance from store:", error);
@@ -222,21 +227,21 @@ export function useClientManager(
       const newClients = new Map(clients.value);
       newClients.set(clientId, newClient);
       clients.value = newClients;
-      console.log(`[ClientManager] Added client ${clientId} (params to be sent on data channel open).`);
+      // Non-essential log: Added client
     },
     [clients], // `clients` from store
   );
 
   const removeClient = useCallback((clientId: string) => {
     if (!clientManagerStore.webRTCServiceInstance) return;
-    console.log(`[ClientManager] UI Request to disconnect and remove client ${clientId}`);
+    // Non-essential log: UI disconnect request
     clientManagerStore.webRTCServiceInstance.disconnect(clientId);
   }, []); // Uses module store instance
 
   const connectToClient = useCallback(async (clientId: string) => {
     if (!clientManagerStore.webRTCServiceInstance) return;
     if (!clients.value.has(clientId)) { addClient(clientId); } // addClient is stable
-    console.log(`Connecting to client ${clientId}`);
+    // Non-essential log: Connecting to client
     await clientManagerStore.webRTCServiceInstance.initRTC(clientId);
   }, [clients, addClient]); // `clients` from store, addClient is stable
 
@@ -270,7 +275,7 @@ export function useClientManager(
       const payload = {type: "synth_param", param: paramId, value: value,};
       clientManagerStore.webRTCServiceInstance.broadcastMessage(payload, "reliable_control");
       // Simplified logging, detailed counts can be added if needed
-      console.log(`Broadcast legacy global param: ${paramId}=${value}`);
+      // Non-essential log: Broadcast global param
     },
     [], // Uses module store instance
   );
@@ -281,7 +286,7 @@ export function useClientManager(
       const results = clientManagerStore.webRTCServiceInstance.broadcastMessage(message, channelLabel);
       let sentCount = 0;
       for (const success of results.values()) { if (success) sentCount++; }
-      console.log(`Broadcast message sent on [${channelLabel}] to ${sentCount}/${results.size} clients: \"${message}\"`);
+      // Non-essential log: Broadcast message sent
     },
     [], // Uses module store instance. controllerId for source was removed from payload.
   );

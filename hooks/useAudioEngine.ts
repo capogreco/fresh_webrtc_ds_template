@@ -34,13 +34,12 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
       const prefix = `[AudioEngine]`;
       addLog(`${prefix} ${message}`);
       if (level === "error") console.error(`${prefix} ${message}`);
-      else if (level === "warn") console.warn(`${prefix} ${message}`);
-      else console.log(`${prefix} ${message}`);
+      // Only log errors to console, all messages go to UI logs
     },
     [addLog],
   );
 
-  log("Hook useAudioEngine part 1 initializing (skeleton, stubs, context).");
+  // log("Hook useAudioEngine part 1 initializing (skeleton, stubs, context).");
 
   // === Core Audio Context State ===
   const audioContextSignal = useSignal<AudioContext | null>(null);
@@ -219,9 +218,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
               ) {
                 outputGainNodeSignal.value.connect(analyserNodeRef.current); // MasterGain -> Analyser
                 analyserNodeRef.current.connect(newAudioContext.destination); // Analyser -> Destination
-                log(
-                  "Audio path: PN -> PinkNoiseGain <- LFO, PinkNoiseGain -> MasterGain -> Analyser -> Destination.",
-                );
+                // Audio path configured
               } else {
                 log(
                   "Critical error: Failed to connect AnalyserNode in series. Audio output may be compromised.",
@@ -255,9 +252,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
               // Set gain node base value to 0 - LFO will add its output to this value
               pinkNoiseGainNodeRef.current.gain.setValueAtTime(0, acTime);
 
-              log(
-                "LFO set for volume check (frozen at 0.5). Pink noise should be audible.",
-              );
+              // Volume check configuration complete
               coreAudioNodesSetupComplete.current = true; // Mark core node setup as complete for this AC
               isVolumeCheckActiveSignal.value = true; // Volume check is active
               isProgramRunningSignal.value = false; // Explicitly ensure program is not marked as running
@@ -311,7 +306,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
   // This function will be called when user confirms volume setting
   const confirmVolumeSetAndPrepare = useCallback(() => {
     if (lfoNodeRef.current && audioContextSignal.value?.state === "running") {
-      log("Volume set. Pink noise layer will now perform a phase-driven roll-down.");
+      // Volume confirmation received
       isVolumeCheckActiveSignal.value = false;
 
       const lfoNode = lfoNodeRef.current;
@@ -320,7 +315,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
       const rollDownRate = 0.5; // Defined rate for the volume check roll-down (e.g., 0.5 Hz)
 
       // Instead of ramping down amplitude, use run_until_and_freeze to naturally reach a silent phase
-      log("Commanding LFO to run until phase 1.0 and then freeze");
+      // Initiating roll-down effect
       
       // Set LFO rate to a moderate value for roll-down effect
       const lfoParams = lfoNode.parameters.get("rate");
@@ -331,7 +326,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
       // Keep the amplitude at its current value
       const lfoAmpFactorParam = lfoNode.parameters.get("amplitudeFactor");
       if (lfoAmpFactorParam) {
-        log(`Maintaining LFO amplitudeFactor at current value: ${lfoAmpFactorParam.value.toFixed(4)}`);
+        // Maintaining current LFO amplitude
       }
       
       // Command the LFO to run until it reaches phase 1.0 (silence for cosine) and then freeze
@@ -341,7 +336,7 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
         targetPhase: 1.0
       });
       
-      log("LFO commanded to run until phase 1.0 and then freeze at silence point");
+      // Roll-down command completed
 
       // The main "program" isn't running yet. The roll-down is a one-shot effect.
       // Ensure isProgramRunningSignal is false.
@@ -464,16 +459,12 @@ export default function useAudioEngine(addLog: LoggerFn): UseAudioEngineReturn {
         isGloballyMutedSignal.value ? 0 : 1,
         audioContextSignal.value.currentTime,
       );
-      log(
-        `Global mute effect applied. isGloballyMuted: ${isGloballyMutedSignal.value}`,
-      );
+      // Global mute setting updated
     } else if (outputGainNodeSignal.value) {
       outputGainNodeSignal.value.gain.value = isGloballyMutedSignal.value
         ? 0
         : 1;
-      log(
-        `Global mute set (context not running). isGloballyMuted: ${isGloballyMutedSignal.value}`,
-      );
+      // Global mute updated while context suspended
     }
   }, [
     isGloballyMutedSignal.value,

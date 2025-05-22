@@ -29,7 +29,21 @@ const activeConnections = new Map<string, WebSocket>();
 async function registerController(controllerId: string): Promise<void> {
   // Store the controller ID directly in KV
   await kv.set(CONTROLLER_KEY, controllerId);
-  console.log(`Registered controller: ${controllerId}`);
+  // Essential log - track controller registration
+  console.log(`[${new Date().toISOString()}] CONTROLLER: Registered controller: ${controllerId}`);
+}
+
+/**
+ * Broadcast controller info to a specific client
+ */
+async function sendControllerInfoToClient(clientId: string, socket: WebSocket): Promise<void> {
+  const activeController = await getActiveController();
+  socket.send(JSON.stringify({
+    type: "controller-info",
+    controllerId: activeController,
+  }));
+  // Non-essential log - remove
+  // console.log(`Sent controller info (${activeController || "none"}) to client ${clientId}`);
 }
 
 /**
@@ -37,11 +51,14 @@ async function registerController(controllerId: string): Promise<void> {
  */
 async function unregisterController(controllerId: string): Promise<void> {
   // Get current controller to verify it's the one being unregistered
+  // Non-essential log - remove
+  // console.log(`[${new Date().toISOString()}] CONTROLLER: Attempting to unregister controller: ${controllerId}`);
   const controller = await kv.get(CONTROLLER_KEY);
 
   if (controller.value === controllerId) {
     await kv.delete(CONTROLLER_KEY);
-    console.log(`Unregistered controller: ${controllerId}`);
+    // Essential log - track controller unregistration
+    console.log(`[${new Date().toISOString()}] CONTROLLER: Unregistered controller: ${controllerId}`);
   }
 }
 
@@ -79,14 +96,16 @@ export const handler: Handlers = {
     let clientId: string | null = null;
 
     socket.onopen = () => {
-      console.log("WebSocket connection opened");
+      // Non-essential log - remove
+      // console.log("WebSocket connection opened");
     };
 
     socket.onmessage = async (event) => {
       try {
         // Check for empty or non-text messages
         if (!event.data || typeof event.data !== "string") {
-          console.log("Received invalid message data:", event.data);
+          // Non-essential log - remove
+          // console.log("Received invalid message data:", event.data);
           return;
         }
 
@@ -95,7 +114,8 @@ export const handler: Handlers = {
 
         // Ensure message and type exist
         if (!message || !message.type) {
-          console.log("Received message with missing type:", message);
+          // Non-essential log - remove
+          // console.log("Received message with missing type:", message);
           return;
         }
 
@@ -116,18 +136,53 @@ export const handler: Handlers = {
               // Register the client with its ID
               clientId = message.id;
               activeConnections.set(clientId!, socket);
+              // Essential log - track client registration
               console.log(`Client registered with ID: ${clientId}`);
 
               // Check if this is a controller client (based on ID prefix or specific dev ID)
               if (clientId!.startsWith("controller-") || clientId === "dev-controller-id") {
-                console.log(`Detected controller client: ${clientId}`);
+                console.log(`[${new Date().toISOString()}] CONTROLLER: Detected controller client: ${clientId}`);
                 // Register as active controller
-                await registerController(clientId!);
-                console.log(`Controller registration complete: ${clientId}`);
+                try {
+                  await registerController(clientId!);
+                  // Essential log - track controller registration completion
+                  console.log(`[${new Date().toISOString()}] CONTROLLER: Registration complete for ${clientId}`);
+                  
+                  // Count how many clients we'll notify
+                  const clientsToNotify = Array.from(activeConnections.keys())
+                    .filter(id => id !== clientId)
+                    .length;
+                  
+                  // Essential log - track broadcast notifications
+                  console.log(`[${new Date().toISOString()}] BROADCAST: Broadcasting controller info to ${clientsToNotify} clients`);
+                  
+                  // Broadcast controller info to all connected clients
+                  for (const [connectedClientId, clientSocket] of activeConnections.entries()) {
+                    if (connectedClientId !== clientId) { // Don't need to send to the controller itself
+                      try {
+                        clientSocket.send(JSON.stringify({
+                          type: "controller-info",
+                          controllerId: clientId,
+                        }));
+                        // Essential log - track client notifications
+                        console.log(`[${new Date().toISOString()}] BROADCAST: Notified client ${connectedClientId} about controller ${clientId}`);
+                      } catch (error) {
+                        console.error(`[${new Date().toISOString()}] ERROR: Failed to notify client ${connectedClientId} about controller: ${error}`);
+                      }
+                    }
+                  }
+                } catch (error) {
+                  console.error(`[${new Date().toISOString()}] ERROR: Failed to register controller ${clientId}: ${error}`);
+                }
               }
 
               // Deliver any queued messages immediately
               await deliverQueuedMessages(kv, clientId!, socket);
+              
+              // If this is not a controller, send the current controller info
+              if (!clientId!.startsWith("controller-") && clientId !== "dev-controller-id") {
+                await sendControllerInfoToClient(clientId!, socket);
+              }
             }
             break;
 
@@ -135,7 +190,7 @@ export const handler: Handlers = {
             {
               // Client is requesting the active controller
               if (!clientId) {
-                console.error("Client not registered");
+                console.error(`[${new Date().toISOString()}] ERROR: Client not registered for get-controller request`);
                 return;
               }
 
@@ -148,8 +203,9 @@ export const handler: Handlers = {
                 controllerId: activeController,
               }));
 
+              // Essential log - track controller info requests
               console.log(
-                `Sent controller info to ${clientId}: ${
+                `[${new Date().toISOString()}] CONTROLLER-INFO: Sent controller info to ${clientId}: ${
                   activeController || "none"
                 }`,
               );
@@ -175,9 +231,10 @@ export const handler: Handlers = {
                 return;
               }
 
-              console.log(
-                `SIGNAL: Controller-kicked message from ${clientId} to ${kickTargetId}`,
-              );
+              // Non-essential log - remove
+              // console.log(
+              //   `SIGNAL: Controller-kicked message from ${clientId} to ${kickTargetId}`,
+              // );
 
               // Format the kick message
               const kickMessage = {
@@ -194,22 +251,26 @@ export const handler: Handlers = {
                 kickedControllerSocket &&
                 kickedControllerSocket.readyState === WebSocket.OPEN
               ) {
-                console.log(
-                  `SIGNAL: Direct delivery of controller-kicked from ${clientId} to ${kickTargetId}`,
-                );
+                // Non-essential log - remove
+                // console.log(
+                //   `SIGNAL: Direct delivery of controller-kicked from ${clientId} to ${kickTargetId}`,
+                // );
                 kickedControllerSocket.send(JSON.stringify(kickMessage));
-                console.log(
-                  `SIGNAL: Delivered controller-kicked to ${kickTargetId}`,
-                );
+                // Non-essential log - remove
+                // console.log(
+                //   `SIGNAL: Delivered controller-kicked to ${kickTargetId}`,
+                // );
               } else {
                 // Queue the kick message for later delivery
-                console.log(
-                  `SIGNAL: Target ${kickTargetId} not connected, queuing kick message`,
-                );
+                // Non-essential log - remove
+                // console.log(
+                //   `SIGNAL: Target ${kickTargetId} not connected, queuing kick message`,
+                // );
                 await queueMessage(kv, kickTargetId, kickMessage);
-                console.log(
-                  `SIGNAL: Queued controller-kicked for ${kickTargetId}`,
-                );
+                // Non-essential log - remove
+                // console.log(
+                //   `SIGNAL: Queued controller-kicked for ${kickTargetId}`,
+                // );
               }
             }
             break;
@@ -220,48 +281,105 @@ export const handler: Handlers = {
           case "ice-candidate":
             {
               if (!clientId) {
-                console.error("Client not registered");
+                console.error(`[${new Date().toISOString()}] ERROR: Client not registered for ${message.type} message`);
                 return;
               }
 
               const targetId = message.target;
               if (!targetId) {
-                console.error("Target ID missing in message");
+                console.error(`[${new Date().toISOString()}] ERROR: Target ID missing in ${message.type} message from ${clientId}`);
                 return;
               }
 
-              console.log(
-                `SIGNAL: ${message.type} message from ${clientId} to ${targetId}`,
-              );
+              // Non-essential log - remove
+              // console.log(
+              //   `[${new Date().toISOString()}] SIGNAL: ${message.type.toUpperCase()} message from ${clientId} to ${targetId}`,
+              // );
+              
+              if (message.type === "offer") {
+                // Non-essential log - remove
+                // console.log(`[${new Date().toISOString()}] OFFER DETAILS: Client ${clientId} is initiating connection to ${targetId}`);
+                // Non-essential log - remove
+                // console.log(`[${new Date().toISOString()}] OFFER CONTENT:`, JSON.stringify(message).substring(0, 200) + "...");
+              } else if (message.type === "answer") {
+                // Non-essential log - remove
+                // console.log(`[${new Date().toISOString()}] ANSWER DETAILS: Controller ${clientId} is accepting connection from ${targetId}`);
+                // Non-essential log - remove
+                // console.log(`[${new Date().toISOString()}] ANSWER CONTENT:`, JSON.stringify(message).substring(0, 200) + "...");
+              } else if (message.type === "ice-candidate") {
+                // Non-essential log - remove
+                // console.log(`[${new Date().toISOString()}] ICE DETAILS: ${clientId} sending candidate to ${targetId} (${message.data ? 'with data' : 'null candidate'})`);
+                // Non-essential log - remove
+                // console.log(`[${new Date().toISOString()}] ICE CANDIDATE:`, JSON.stringify(message.data || {}).substring(0, 100));
+              }
 
-              // Format signal message with source information
+              // Format signal message with source information and handle both data and sdp fields
+              let formattedData = message.data || message.sdp;
+              
+              // Special handling for ICE candidates
+              if (message.type === "ice-candidate" && formattedData) {
+                // Ensure ICE candidates have required fields
+                if (typeof formattedData === 'object' && formattedData.candidate !== undefined) {
+                  if (!formattedData.sdpMid && formattedData.sdpMLineIndex === undefined) {
+                    // Non-essential log - remove
+                    // console.log(`[${new Date().toISOString()}] FIXING ICE CANDIDATE: Adding default sdpMid/sdpMLineIndex`);
+                    formattedData = {
+                      ...formattedData,
+                      sdpMid: formattedData.sdpMid || "0",
+                      sdpMLineIndex: formattedData.sdpMLineIndex !== undefined ? formattedData.sdpMLineIndex : 0
+                    };
+                  }
+                }
+              }
+              
               const signalMessage = {
                 type: message.type,
-                data: message.data,
+                data: formattedData,
                 source: clientId,
               };
 
               // Try direct delivery if target is connected to this instance
               const targetSocket = activeConnections.get(targetId);
               if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                console.log(
-                  `SIGNAL: Direct delivery of ${message.type} from ${clientId} to ${targetId}`,
-                );
-                targetSocket.send(JSON.stringify(signalMessage));
-                console.log(`SIGNAL: Delivered ${message.type} to ${targetId}`);
+                // Non-essential log - remove
+                // console.log(
+                //   `[${new Date().toISOString()}] DELIVERY: Direct delivery of ${message.type} from ${clientId} to ${targetId}`,
+                // );
+                try {
+                  // Log full message being sent for debugging
+                  // Non-essential log - remove
+                  // console.log(`[${new Date().toISOString()}] SENDING: ${message.type} message to ${targetId}, data present: ${!!signalMessage.data}`);
+                  
+                  targetSocket.send(JSON.stringify(signalMessage));
+                  // Non-essential log - remove
+                  // console.log(`[${new Date().toISOString()}] SUCCESS: Delivered ${message.type} to ${targetId}`);
+                } catch (error) {
+                  console.error(`[${new Date().toISOString()}] ERROR: Failed to deliver ${message.type} to ${targetId}: ${error}`);
+                }
               } else {
                 // Queue message for later delivery
-                console.log(
-                  `SIGNAL: Target ${targetId} not connected, queuing message`,
-                );
-                await queueMessage(kv, targetId, signalMessage);
-                console.log(`SIGNAL: Queued ${message.type} for ${targetId}`);
+                // Non-essential log - remove
+                // console.log(
+                //   `[${new Date().toISOString()}] QUEUE: Target ${targetId} not connected (socket: ${targetSocket ? 'exists' : 'null'}, state: ${targetSocket ? targetSocket.readyState : 'N/A'}), queuing message`,
+                // );
+                try {
+                  // Log message being queued for debugging
+                  // Non-essential log - remove
+                  // console.log(`[${new Date().toISOString()}] QUEUEING: ${message.type} message for ${targetId}, data present: ${!!signalMessage.data}`);
+                  
+                  await queueMessage(kv, targetId, signalMessage);
+                  // Non-essential log - remove
+                  // console.log(`[${new Date().toISOString()}] QUEUE: Successfully queued ${message.type} for ${targetId}`);
+                } catch (error) {
+                  console.error(`[${new Date().toISOString()}] ERROR: Failed to queue ${message.type} for ${targetId}: ${error}`);
+                }
               }
             }
             break;
 
           default:
-            console.log(`Unknown message type: ${message.type}`);
+            // Non-essential log - remove
+            // console.log(`Unknown message type: ${message.type}`);
         }
       } catch (error) {
         console.error("Error handling WebSocket message:", error);
@@ -272,6 +390,7 @@ export const handler: Handlers = {
       // Simple connection cleanup - remove from active connections
       if (clientId) {
         activeConnections.delete(clientId);
+        // Essential log - track client disconnection
         console.log(`Client disconnected: ${clientId}`);
 
         // If this was a controller, unregister it
